@@ -39,7 +39,11 @@ MAX_FROZEN_CHECKPOINT_BYTES = max(FROZEN_CHECKPOINT_SIZES.values())
 
 
 def sha256(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def load_frozen_checkpoint(path):
