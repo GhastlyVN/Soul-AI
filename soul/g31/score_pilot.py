@@ -301,7 +301,7 @@ def run(checkpoint_path=None, predictions_path=None, metrics_path=None,
     # A failed serialization/write therefore cannot leave a partially written artifact.
     payloads = {
         predictions_path: ''.join(
-            json.dumps(record, sort_keys=True) + '\\n' for record in records
+            json.dumps(record, sort_keys=True) + '\n' for record in records
         ),
         metrics_path: json.dumps(metrics, indent=2, sort_keys=True),
         report_path: json.dumps(report, indent=2, sort_keys=True),
@@ -320,7 +320,7 @@ def run(checkpoint_path=None, predictions_path=None, metrics_path=None,
             ) as stream:
                 staged[destination] = Path(stream.name)
                 stream.write(rendered)
-                stream.write('\\n')
+                stream.write('\n')
                 stream.flush()
                 os.fsync(stream.fileno())
         for destination, temporary in staged.items():
