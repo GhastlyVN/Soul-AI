@@ -49,6 +49,23 @@ def test_rejects_windows_special_path_aliases(tmp_path: Path, unsafe_name: str):
         inspect_package(archive)
 
 
+@pytest.mark.parametrize(
+    "unsafe_name",
+    [
+        f"{'a' * 256}.bin",
+        f"{'界' * 86}.bin",
+        "/".join(["segment" * 30] * 20),
+        "/".join(["d"] * 65 + ["file.bin"]),
+    ],
+)
+def test_rejects_unportable_path_lengths(tmp_path: Path, unsafe_name: str):
+    archive = tmp_path / "long-path.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr(unsafe_name, b"payload")
+    with pytest.raises(ValueError, match="(unsafe ZIP path|portable path limits)"):
+        inspect_package(archive)
+
+
 def test_rejects_case_insensitive_duplicate_paths(tmp_path: Path):
     archive = tmp_path / "collision.zip"
     with zipfile.ZipFile(archive, "w") as zf:

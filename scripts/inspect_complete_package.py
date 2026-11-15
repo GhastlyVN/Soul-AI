@@ -23,6 +23,10 @@ MAX_ARCHIVE_BYTES = 9 * 1024**3
 MAX_MEMBER_UNCOMPRESSED_BYTES = 2 * 1024**3
 MAX_TOTAL_UNCOMPRESSED_BYTES = 8 * 1024**3
 MAX_JSON_BYTES = 32 * 1024**2
+MAX_PATH_UTF8_BYTES = 4096
+MAX_PATH_COMPONENTS = 64
+MAX_COMPONENT_UTF8_BYTES = 255
+MAX_COMPONENT_UTF16_UNITS = 255
 CHUNK_SIZE = 1024 * 1024
 
 WINDOWS_RESERVED_NAMES = {
@@ -38,6 +42,8 @@ def _portable_windows_component(part: str) -> bool:
     stem = part.split(".", 1)[0].rstrip(" .").upper()
     return (
         bool(part)
+        and len(part.encode("utf-8")) <= MAX_COMPONENT_UTF8_BYTES
+        and len(part.encode("utf-16-le")) // 2 <= MAX_COMPONENT_UTF16_UNITS
         and not part.endswith((" ", "."))
         and not any(ord(char) < 32 or char in '<>:"|?*' for char in part)
         and stem not in WINDOWS_RESERVED_NAMES
@@ -65,6 +71,12 @@ def _validate_name(info: zipfile.ZipInfo) -> tuple[str, bool]:
     raw = info.filename.replace(chr(92), "/")
     path = PurePosixPath(raw)
     is_directory = info.is_dir() or raw.endswith("/")
+    try:
+        path_bytes = len(raw.encode("utf-8"))
+    except UnicodeEncodeError as error:
+        raise ValueError(f"ZIP path is not valid Unicode: {info.filename}") from error
+    if path_bytes > MAX_PATH_UTF8_BYTES or len(path.parts) > MAX_PATH_COMPONENTS:
+        raise ValueError(f"ZIP path exceeds portable path limits: {info.filename}")
     if (
         not path.parts
         or raw.startswith("/")
