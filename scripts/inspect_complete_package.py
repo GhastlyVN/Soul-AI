@@ -97,6 +97,28 @@ def _validate_name(info: zipfile.ZipInfo) -> tuple[str, bool]:
     return "/".join(path.parts), is_directory
 
 
+def _hash_archive_bounded(stream):
+    """Hash one open archive without reading more than the configured limit plus one byte."""
+    archive_hash = hashlib.sha256()
+    total_bytes = 0
+    while True:
+        # Read at most the remaining allowance plus one byte. The extra byte is
+        # enough to prove the stream crossed the limit without consuming a full
+        # chunk beyond the configured resource ceiling.
+        remaining = MAX_ARCHIVE_BYTES - total_bytes
+        chunk = stream.read(min(CHUNK_SIZE, remaining + 1))
+        if not chunk:
+            break
+        total_bytes += len(chunk)
+        if total_bytes > MAX_ARCHIVE_BYTES:
+            raise ValueError(
+                f"ZIP archive exceeds inspection size limit while hashing: "
+                f"{total_bytes} (limit {MAX_ARCHIVE_BYTES})"
+            )
+        archive_hash.update(chunk)
+    return archive_hash
+
+
 def inspect_package(archive_path: Path) -> dict[str, object]:
     if not archive_path.is_file():
         raise ValueError(f"not a readable ZIP archive: {archive_path}")
@@ -121,9 +143,7 @@ def inspect_package(archive_path: Path) -> dict[str, object]:
         prefix_spellings: dict[str, str] = {}
         directories = 0
         total_uncompressed = 0
-        archive_hash = hashlib.sha256()
-        for chunk in iter(lambda: raw_archive.read(CHUNK_SIZE), b""):
-            archive_hash.update(chunk)
+        archive_hash = _hash_archive_bounded(raw_archive)
         raw_archive.seek(0)
 
         with zipfile.ZipFile(raw_archive) as zf:

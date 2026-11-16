@@ -255,3 +255,24 @@ def test_cli_preserves_previous_report_if_atomic_replace_fails(tmp_path: Path):
         "Soul_AI_Complete_Package.zip", "inventory.json"
     ]
 
+def test_archive_hash_stops_at_limit_plus_one_byte():
+    class GrowingStream:
+        def __init__(self):
+            self.data = b"123456"
+            self.offset = 0
+            self.read_sizes = []
+
+        def read(self, size):
+            self.read_sizes.append(size)
+            chunk = self.data[self.offset : self.offset + size]
+            self.offset += len(chunk)
+            return chunk
+
+    stream = GrowingStream()
+    with patch("scripts.inspect_complete_package.MAX_ARCHIVE_BYTES", 4):
+        with pytest.raises(ValueError, match="exceeds inspection size limit while hashing"):
+            inspector._hash_archive_bounded(stream)
+
+    # The inspector reads only the one byte needed to prove the limit was crossed.
+    assert stream.read_sizes == [5]
+    assert stream.offset == 5
