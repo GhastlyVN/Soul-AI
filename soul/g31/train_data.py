@@ -26,6 +26,7 @@ def pendulum_model_config(cfg):
 MAX_TRAIN_JSONL_BYTES = 4 * 1024 * 1024
 MAX_TRAIN_JSONL_ROWS = 10_000
 
+
 def _reject_duplicate_json_keys(pairs):
     """Reject ambiguous JSON objects instead of silently keeping the last value."""
     result = {}

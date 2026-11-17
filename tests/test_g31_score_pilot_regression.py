@@ -36,7 +36,7 @@ def test_pilot_loader_rejects_duplicate_nested_json_keys(tmp_path):
         '"metadata":{"source":"first","source":"second"}}'
     )
     path = tmp_path / "duplicate-nested-keys.jsonl"
-    path.write_text(raw + '\\n', encoding="utf-8")
+    path.write_text(raw + '\n', encoding="utf-8")
     with pytest.raises(ValueError, match="duplicate JSON key"):
         load_rows_snapshot(path, "pilot", range(2001, 2006))
 

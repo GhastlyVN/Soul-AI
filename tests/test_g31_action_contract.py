@@ -67,7 +67,7 @@ class G31ActionContractTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'duplicate-keys.jsonl'
-            path.write_text(raw + '\\n', encoding='utf-8')
+            path.write_text(raw + '\n', encoding='utf-8')
             with self.assertRaisesRegex(ValueError, 'duplicate JSON key'):
                 load_train_jsonl_snapshot(str(path))
 
