@@ -143,6 +143,7 @@ def inspect_package(archive_path: Path) -> dict[str, object]:
         prefix_spellings: dict[str, str] = {}
         directories = 0
         total_uncompressed = 0
+        actual_total_uncompressed = 0
         archive_hash = _hash_archive_bounded(raw_archive)
         raw_archive.seek(0)
 
@@ -221,9 +222,14 @@ def inspect_package(archive_path: Path) -> dict[str, object]:
                 with zf.open(info) as source:
                     while chunk := source.read(CHUNK_SIZE):
                         actual_size += len(chunk)
+                        actual_total_uncompressed += len(chunk)
                         if actual_size > MAX_MEMBER_UNCOMPRESSED_BYTES:
                             raise ValueError(
                                 f"actual ZIP member size exceeds limit: {name}"
+                            )
+                        if actual_total_uncompressed > MAX_TOTAL_UNCOMPRESSED_BYTES:
+                            raise ValueError(
+                                "actual ZIP archive exceeds total uncompressed size limit"
                             )
                         digest.update(chunk)
                         if json_bytes is not None:
