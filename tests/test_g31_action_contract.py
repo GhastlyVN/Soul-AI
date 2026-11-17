@@ -74,6 +74,7 @@ class G31ActionContractTests(unittest.TestCase):
     def test_train_loader_rejects_nonfinite_observations_actions_and_rewards(self):
         base = {
             'episode_id': 'train_ep0', 'split': 'train', 'episode_seed': 1001,
+            'timestep': 0,
             'raw_observation_before': [1.0, 0.0, 0.0],
             'raw_observation_after': [0.9, 0.1, 0.2],
             'applied_action': [0.5], 'reward': 0.0, 'terminal': False,
@@ -98,9 +99,10 @@ class G31ActionContractTests(unittest.TestCase):
     def test_train_loader_hashes_the_exact_bytes_it_parses(self):
         row = {
             'episode_id': 'train_ep0', 'split': 'train', 'episode_seed': 1001,
+            'timestep': 0,
             'raw_observation_before': [1.0, 0.0, 0.0],
             'raw_observation_after': [0.99, 0.1, 0.2],
-            'applied_action': [0.5],
+            'applied_action': [0.5], 'reward': 0.0, 'terminal': False,
             'environment_config': {'env_id': 'Pendulum-v1'},
         }
         raw = (json.dumps(row) + '\n').encode('utf-8')
