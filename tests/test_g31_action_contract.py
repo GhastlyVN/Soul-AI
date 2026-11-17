@@ -58,6 +58,19 @@ class G31ActionContractTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]['episode_seed'], 1001)
 
+    def test_train_loader_rejects_duplicate_json_keys(self):
+        raw = (
+            '{"episode_id":"train_ep0","split":"train","split":"pilot",'
+            '"episode_seed":1001,"raw_observation_before":[1.0,0.0,0.0],'
+            '"raw_observation_after":[0.9,0.1,0.2],"applied_action":[0.5],'
+            '"environment_config":{"env_id":"Pendulum-v1"}}'
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'duplicate-keys.jsonl'
+            path.write_text(raw + '\\n', encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'duplicate JSON key'):
+                load_train_jsonl_snapshot(str(path))
+
     def test_train_loader_rejects_nonfinite_observations_actions_and_rewards(self):
         base = {
             'episode_id': 'train_ep0', 'split': 'train', 'episode_seed': 1001,

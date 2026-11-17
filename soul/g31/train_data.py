@@ -26,6 +26,24 @@ def pendulum_model_config(cfg):
 MAX_TRAIN_JSONL_BYTES = 4 * 1024 * 1024
 MAX_TRAIN_JSONL_ROWS = 10_000
 
+def _reject_duplicate_json_keys(pairs):
+    """Reject ambiguous JSON objects instead of silently keeping the last value."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f'duplicate JSON key: {key!r}')
+        result[key] = value
+    return result
+
+
+def parse_jsonl_object(line: str, source: Path, line_no: int) -> Dict:
+    """Parse one JSONL object and reject duplicate keys at every nesting level."""
+    row = json.loads(line, object_pairs_hook=_reject_duplicate_json_keys)
+    if not isinstance(row, dict):
+        raise ValueError(f'row must be a JSON object at {source}:{line_no}')
+    return row
+
+
 
 def _file_identity(metadata):
     return (
@@ -69,9 +87,7 @@ def load_train_jsonl_snapshot(path: str):
     raw, digest = read_file_snapshot(source, MAX_TRAIN_JSONL_BYTES)
     rows = []
     for line_no, line in enumerate(raw.decode('utf-8').splitlines(), 1):
-        row = json.loads(line)
-        if not isinstance(row, dict):
-            raise ValueError(f'row must be a JSON object at {source}:{line_no}')
+        row = parse_jsonl_object(line, source, line_no)
         if row.get('split') != 'train':
             raise ValueError(f'non-TRAIN row at {source}:{line_no}')
         if row.get('episode_seed') not in TRAIN_SEEDS:

@@ -18,7 +18,7 @@ from soul.g31.evaluator import (
 )
 from soul.g31.train_data import (
     PENDULUM_ENV_ID, TRAIN_SEEDS, load_train_jsonl_snapshot,
-    pendulum_model_config, read_file_snapshot,
+    parse_jsonl_object, pendulum_model_config, read_file_snapshot,
 )
 from soul.model import SoulModel
 from soul.obs import ObsEncoder
@@ -80,7 +80,10 @@ def load_rows_snapshot(path, split, seeds, expected_sha256=None):
     raw, digest = read_file_snapshot(path, MAX_PILOT_DATASET_BYTES)
     if expected_sha256 is not None and digest != expected_sha256:
         raise RuntimeError(f'{split.title()} dataset hash mismatch')
-    rows = [json.loads(line) for line in raw.decode('utf-8').splitlines()]
+    rows = [
+        parse_jsonl_object(line, path, line_no)
+        for line_no, line in enumerate(raw.decode('utf-8').splitlines(), 1)
+    ]
     if len(rows) > MAX_PILOT_DATASET_ROWS:
         raise ValueError(f'{path} exceeds the row limit of {MAX_PILOT_DATASET_ROWS}')
     if any(row.get('split') != split for row in rows):

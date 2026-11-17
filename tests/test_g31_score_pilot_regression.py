@@ -28,6 +28,19 @@ def test_default_scorer_resolves_to_a_checkpoint():
     assert DEFAULT_CHECKPOINT_PATH == A_CHECKPOINT
 
 
+def test_pilot_loader_rejects_duplicate_nested_json_keys(tmp_path):
+    from soul.g31.score_pilot import load_rows_snapshot
+
+    raw = (
+        '{"episode_id":"pilot_ep0","split":"pilot","episode_seed":2001,'
+        '"metadata":{"source":"first","source":"second"}}'
+    )
+    path = tmp_path / "duplicate-nested-keys.jsonl"
+    path.write_text(raw + '\\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate JSON key"):
+        load_rows_snapshot(path, "pilot", range(2001, 2006))
+
+
 def test_explicit_b1_checkpoint_resolves_to_b1():
     # Explicit parameter must resolve to B1 file
     assert B1_CHECKPOINT.exists()
