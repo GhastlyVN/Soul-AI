@@ -91,8 +91,21 @@ def load_train_jsonl_snapshot(path: str):
         row = parse_jsonl_object(line, source, line_no)
         if row.get('split') != 'train':
             raise ValueError(f'non-TRAIN row at {source}:{line_no}')
-        if row.get('episode_seed') not in TRAIN_SEEDS:
+        episode_seed = row.get('episode_seed')
+        if (
+            isinstance(episode_seed, bool)
+            or not isinstance(episode_seed, int)
+            or episode_seed not in TRAIN_SEEDS
+        ):
             raise ValueError(f'non-TRAIN seed at {source}:{line_no}')
+        episode_id = row.get('episode_id')
+        if not isinstance(episode_id, str) or not episode_id.strip():
+            raise ValueError(f'invalid episode_id at {source}:{line_no}')
+        timestep = row.get('timestep')
+        if isinstance(timestep, bool) or not isinstance(timestep, int) or timestep < 0:
+            raise ValueError(f'invalid timestep at {source}:{line_no}')
+        if not isinstance(row.get('terminal'), bool):
+            raise ValueError(f'terminal must be a boolean at {source}:{line_no}')
         before = np.asarray(row['raw_observation_before'], dtype=np.float32)
         after = np.asarray(row['raw_observation_after'], dtype=np.float32)
         action = np.asarray(row['applied_action'], dtype=np.float32)
@@ -102,13 +115,14 @@ def load_train_jsonl_snapshot(path: str):
             raise ValueError(f'bad applied action shape at {source}:{line_no}')
         if not np.isfinite(before).all() or not np.isfinite(after).all() or not np.isfinite(action).all():
             raise ValueError(f'nonfinite observation or action at {source}:{line_no}')
-        if 'reward' in row:
-            try:
-                reward = float(row['reward'])
-            except (TypeError, ValueError) as error:
-                raise ValueError(f'invalid reward at {source}:{line_no}') from error
-            if not np.isfinite(reward):
-                raise ValueError(f'nonfinite reward at {source}:{line_no}')
+        if 'reward' not in row:
+            raise ValueError(f'missing reward at {source}:{line_no}')
+        reward_value = row['reward']
+        if isinstance(reward_value, bool) or not isinstance(reward_value, (int, float)):
+            raise ValueError(f'invalid reward at {source}:{line_no}')
+        reward = float(reward_value)
+        if not np.isfinite(reward):
+            raise ValueError(f'nonfinite reward at {source}:{line_no}')
         environment = row.get('environment_config')
         if not isinstance(environment, dict) or environment.get('env_id') != PENDULUM_ENV_ID:
             raise ValueError(f'wrong environment at {source}:{line_no}')
