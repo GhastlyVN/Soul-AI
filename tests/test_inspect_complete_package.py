@@ -1,4 +1,5 @@
 import hashlib
+import io
 import json
 import zipfile
 from pathlib import Path
@@ -172,6 +173,40 @@ def test_rejects_oversized_expansion(tmp_path: Path):
         zf.writestr("payload.bin", b"12345")
     with patch("scripts.inspect_complete_package.MAX_TOTAL_UNCOMPRESSED_BYTES", 4):
         with pytest.raises(ValueError, match="total uncompressed size limit"):
+            inspect_package(archive)
+
+
+def test_rejects_actual_total_expansion_above_limit(tmp_path: Path):
+    archive = tmp_path / "actual-total-expansion.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("first.bin", b"12345678")
+        zf.writestr("second.bin", b"x")
+
+    original_infolist = zipfile.ZipFile.infolist
+    original_open = zipfile.ZipFile.open
+
+    def undersized_infolist(instance):
+        entries = original_infolist(instance)
+        for info in entries:
+            if info.filename == "second.bin":
+                info.file_size = 1
+        return entries
+
+    def expanded_open(instance, name, *args, **kwargs):
+        filename = getattr(name, "filename", name)
+        if filename == "second.bin":
+            return io.BytesIO(b"12345")
+        return original_open(instance, name, *args, **kwargs)
+
+    with (
+        patch("scripts.inspect_complete_package.MAX_TOTAL_UNCOMPRESSED_BYTES", 10),
+        patch("scripts.inspect_complete_package.MAX_MEMBER_UNCOMPRESSED_BYTES", 10),
+        patch.object(zipfile.ZipFile, "infolist", undersized_infolist),
+        patch.object(zipfile.ZipFile, "open", expanded_open),
+    ):
+        with pytest.raises(
+            ValueError, match="actual ZIP archive exceeds total uncompressed size limit"
+        ):
             inspect_package(archive)
 
 
