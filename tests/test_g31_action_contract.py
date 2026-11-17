@@ -45,10 +45,10 @@ class G31ActionContractTests(unittest.TestCase):
         row = {
             'episode_id': 'train_ep0',
             'split': 'train',
-            'episode_seed': 1001,
+            'episode_seed': 1001, 'timestep': 0,
             'raw_observation_before': [1.0, 0.0, 0.0],
             'raw_observation_after': [0.99, 0.1, 0.2],
-            'applied_action': [0.5],
+            'applied_action': [0.5], 'reward': 0.0, 'terminal': False,
             'environment_config': {'env_id': 'Pendulum-v1'},
         }
         with tempfile.TemporaryDirectory() as directory:
@@ -76,7 +76,7 @@ class G31ActionContractTests(unittest.TestCase):
             'episode_id': 'train_ep0', 'split': 'train', 'episode_seed': 1001,
             'raw_observation_before': [1.0, 0.0, 0.0],
             'raw_observation_after': [0.9, 0.1, 0.2],
-            'applied_action': [0.5], 'reward': 0.0,
+            'applied_action': [0.5], 'reward': 0.0, 'terminal': False,
             'environment_config': {'env_id': 'Pendulum-v1'},
         }
         cases = (

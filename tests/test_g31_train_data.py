@@ -1,10 +1,11 @@
 import hashlib
+import math
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from soul.g31.train_data import load_train_jsonl_snapshot
+from soul.g31.train_data import TRAIN_SEEDS, load_train_jsonl_snapshot
 
 
 def valid_row():
@@ -38,6 +39,16 @@ class G31TrainDataTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(digest, hashlib.sha256(encoded).hexdigest())
+
+    def test_committed_train_dataset_matches_the_strict_schema(self):
+        path = Path(__file__).resolve().parents[1] / "artifacts/g31/train.jsonl"
+
+        rows, digest = load_train_jsonl_snapshot(path)
+
+        self.assertEqual(len(rows), 100)
+        self.assertEqual({row["episode_seed"] for row in rows}, set(TRAIN_SEEDS))
+        self.assertEqual(len({row["episode_id"] for row in rows}), 5)
+        self.assertEqual(len(digest), 64)
 
     def test_missing_reward_is_rejected_before_episode_conversion(self):
         row = valid_row()
@@ -82,7 +93,7 @@ class G31TrainDataTests(unittest.TestCase):
                 row["reward"] = reward
                 path, _ = self._load_row(row)
 
-                expected = "nonfinite reward" if isinstance(reward, float) and not __import__("math").isfinite(reward) else "invalid reward"
+                expected = "nonfinite reward" if isinstance(reward, float) and not math.isfinite(reward) else "invalid reward"
                 with self.assertRaisesRegex(ValueError, expected):
                     load_train_jsonl_snapshot(path)
 
