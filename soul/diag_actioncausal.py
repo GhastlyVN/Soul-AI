@@ -59,8 +59,24 @@ def build(seed=0, steps=1200, warmup_episodes=30,
     return s
 
 
-def measure(s, rng, shuffle, n_batches=10):
+def _shuffle_action_timesteps(actions, valid, generator=None):
+    """Shuffle time positions independently per sequence, preserving padding."""
+    if actions.ndim != 3 or valid.shape != actions.shape[:2]:
+        raise ValueError('actions must be [batch, time, action] and valid [batch, time]')
+    shuffled = actions.clone()
+    for batch_index in range(actions.shape[0]):
+        indices = torch.nonzero(valid[batch_index] > 0, as_tuple=False).flatten()
+        if indices.numel() > 1:
+            permutation = torch.randperm(
+                indices.numel(), device=actions.device, generator=generator
+            )
+            shuffled[batch_index, indices] = actions[batch_index, indices[permutation]]
+    return shuffled
+
+
+def measure(s, rng, shuffle, n_batches=10, shuffle_seed=0):
     tot, n = 0.0, 0
+    shuffle_generator = None
     for _ in range(n_batches):
         b = s.replay.sample(8, rng)
         if b is None:
@@ -73,13 +89,11 @@ def measure(s, rng, shuffle, n_batches=10):
         # while actions/valid cover only the input sequence.
         oi = torch.cat([v_, m_, tx], -1)[:, :seq]
         if shuffle:
-            # Xao tron hanh dong theo THOI GIAN: dung mot bien do rieng
-            # cho moi chuoi. Do la cach bao "dung sai lan" ma van giu
-            # duoc phan phoi bien do cua hanh dong — neu khong xao theo
-            # thoi gian, mau hanh dong o buoc t se chua hanh dong that o
-            # buoc t, va do sai luon ra doi.
-            perm = torch.randperm(ac.shape[0])
-            ac = ac[perm]
+            # Keep action permutations on a private RNG so latent samples remain paired.
+            if shuffle_generator is None:
+                shuffle_generator = torch.Generator(device=ac.device)
+                shuffle_generator.manual_seed(shuffle_seed)
+            ac = _shuffle_action_timesteps(ac, va, generator=shuffle_generator)
         with torch.no_grad():
             out = s.model.dynamics.observe_sequence(
                 oi, ac, s.model.encoder, va)
@@ -89,6 +103,34 @@ def measure(s, rng, shuffle, n_batches=10):
         tot += float(kl)
         n += 1
     return tot / max(n, 1)
+
+
+def measure_paired_actions(s, seed, n_batches=10):
+    """Compare real/shuffled actions with identical latent-noise and replay streams."""
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    cpu_rng_state = torch.get_rng_state()
+    cuda_rng_states = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+
+    real = measure(
+        s,
+        np.random.default_rng(seed),
+        False,
+        n_batches=n_batches,
+        shuffle_seed=seed + 1,
+    )
+    torch.set_rng_state(cpu_rng_state)
+    if cuda_rng_states is not None:
+        torch.cuda.set_rng_state_all(cuda_rng_states)
+    shuffled = measure(
+        s,
+        np.random.default_rng(seed),
+        True,
+        n_batches=n_batches,
+        shuffle_seed=seed + 1,
+    )
+    return real, shuffled
 
 
 def main():
@@ -112,12 +154,8 @@ def main():
         s = build(args.seed, args.steps, args.warmup_episodes,
                   args.learn_per_collect)
         print('  xong.')
-    rng = np.random.default_rng(args.seed + 7)
-
     _banner('KL prior||posterior cua hanh dung va hanh xao tron')
-    real = measure(s, rng, False, n_batches=args.batches)
-    shuf = measure(s, np.random.default_rng(args.seed + 7), True,
-                   n_batches=args.batches)
+    real, shuf = measure_paired_actions(s, args.seed + 7, n_batches=args.batches)
     print(f'  hanh dong THAT     : KL = {real:.4f} nats')
     print(f'  hanh dong XAO TRON : KL = {shuf:.4f} nats')
     print(f'  chenh lech         : {shuf - real:+.4f} nats')
