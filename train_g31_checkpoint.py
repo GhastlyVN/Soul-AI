@@ -14,6 +14,7 @@ from soul.trainer import Trainer
 from soul.memory import ReplayBuffer, Episode
 from soul.obs import ObsEncoder
 from soul.g31.collector import record_transition
+from soul.g31.checkpoint_io import save_checkpoint_atomic, seed_training_rng
 
 # Load real TRAIN data. This entry point deliberately fails closed until the
 # recorded TRAIN JSONL exists; it never falls back to synthetic observations.
@@ -43,6 +44,7 @@ if len(episodes) != 5 or sum(len(ep) for ep in episodes) != 100:
     raise ValueError('TRAIN dataset must contain exactly 5 episodes and 100 transitions')
 if any(action.shape != (1,) for ep in episodes for action in ep.actions):
     raise ValueError('TRAIN actions must remain shape (1,)')
+seed_training_rng(cfg.train.seed)
 model = SoulModel(cfg, enc.input_dim)
 trainer = Trainer(model, cfg, enc.input_dim)
 replay = ReplayBuffer(cfg.train.replay_capacity, cfg.train.seq_len)
@@ -71,13 +73,16 @@ model.eval()
 checkpoint_path = 'artifacts/g31/g31_verified_train_checkpoint.pt'
 os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
 effective_config = cfg.to_dict()
-torch.save({
+save_checkpoint_atomic({
     'schema_version': 'g31.train.v2',
     'model_state_dict': model.state_dict(),
     'optimizer_state_dict': trainer.optimizer.state_dict(),
     'config_dict': effective_config,
     'enc_schema': enc.schema,
     'training_seed': cfg.train.seed,
+    'torch_version': str(torch.__version__),
+    'device': cfg.device,
+    'deterministic_algorithms': torch.are_deterministic_algorithms_enabled(),
     'training_updates': trainer.updates,
     'split': 'TRAIN',
     'train_seeds': sorted({row['episode_seed'] for row in train_rows}),
