@@ -26,8 +26,15 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements.lock
+      # The suite is CPU-only. PyPI's default PyTorch wheel pulls multiple GB of CUDA
+      # runtimes; use the pinned CPU wheel, then install every remaining lock entry without
+      # dependency resolution (requirements.lock contains the complete pinned dependency set).
+      - name: Install pinned CPU-only PyTorch
+        run: >-
+          python -m pip install --disable-pip-version-check --no-deps
+          --index-url https://download.pytorch.org/whl/cpu "torch==2.14.1"
       - name: Install pinned research dependencies
-        run: python -m pip install --disable-pip-version-check -r requirements.lock
+        run: python -m pip install --disable-pip-version-check --no-deps -r requirements.lock
       - name: Validate research split and Confirm boundary
         run: python -m scripts.phase0_validate_protocol
       - name: Run complete regression suite
