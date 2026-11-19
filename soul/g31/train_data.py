@@ -12,6 +12,7 @@ from soul.obs import ObsEncoder
 
 PENDULUM_ENV_ID = 'Pendulum-v1'
 PENDULUM_ACTION_DIM = 1
+PENDULUM_ACTION_BOUNDS = (-2.0, 2.0)
 PENDULUM_OBS_SHAPE = (3,)
 TRAIN_SEEDS = frozenset(range(1001, 1006))
 
@@ -115,6 +116,8 @@ def load_train_jsonl_snapshot(path: str):
             raise ValueError(f'bad applied action shape at {source}:{line_no}')
         if not np.isfinite(before).all() or not np.isfinite(after).all() or not np.isfinite(action).all():
             raise ValueError(f'nonfinite observation or action at {source}:{line_no}')
+        if np.any(action < PENDULUM_ACTION_BOUNDS[0]) or np.any(action > PENDULUM_ACTION_BOUNDS[1]):
+            raise ValueError(f'applied action outside {PENDULUM_ACTION_BOUNDS} at {source}:{line_no}')
         if 'reward' not in row:
             raise ValueError(f'missing reward at {source}:{line_no}')
         reward_value = row['reward']
