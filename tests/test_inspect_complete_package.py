@@ -76,6 +76,15 @@ def test_rejects_case_insensitive_duplicate_paths(tmp_path: Path):
         inspect_package(archive)
 
 
+def test_rejects_file_replacing_an_existing_directory_prefix(tmp_path: Path):
+    archive = tmp_path / "reverse-parent.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("artifacts/phase1/skill.json", "{}")
+        zf.writestr("artifacts/phase1", b"file")
+    with pytest.raises(ValueError, match="file/directory path collision"):
+        inspect_package(archive)
+
+
 def test_rejects_file_used_as_parent_directory(tmp_path: Path):
     archive = tmp_path / "parent.zip"
     with zipfile.ZipFile(archive, "w") as zf:

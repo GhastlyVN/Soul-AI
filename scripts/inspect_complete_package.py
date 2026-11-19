@@ -191,9 +191,7 @@ def inspect_package(archive_path: Path) -> dict[str, object]:
                             f"case-insensitive ZIP directory prefix collision: {info.filename}"
                         )
                     prefix_spellings[folded_prefix] = prefix
-                if not is_directory and any(
-                    existing.startswith(folded + "/") for existing in seen_folded
-                ):
+                if not is_directory and folded in prefix_spellings:
                     raise ValueError(
                         f"file/directory path collision: {info.filename} replaces a directory"
                     )
