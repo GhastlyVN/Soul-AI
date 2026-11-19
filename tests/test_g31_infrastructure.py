@@ -61,6 +61,15 @@ def test_evaluator_uses_prior_not_posterior():
     assert model.mode == 'eval'
 
 
+def test_evaluator_rejects_nonfinite_and_out_of_range_actions():
+    for action in (np.nan, np.inf, -np.inf, 2.0001, -2.0001):
+        try:
+            evaluate_one_step(None, None, [1, 0, 0], [action])
+        except ValueError:
+            continue
+        raise AssertionError(f"invalid Pendulum action was accepted: {action!r}")
+
+
 def test_no_recursive_imagination():
     class Dynamics:
         def initial_state(self, batch, device): return torch.zeros(batch, 3), torch.zeros(batch, 3)

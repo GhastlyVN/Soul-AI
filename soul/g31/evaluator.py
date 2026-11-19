@@ -116,6 +116,8 @@ def evaluate_one_step(model, state, obs_current, action_applied,
         raise ValueError('Pendulum observation must have shape (3,)')
     if action.shape != (1,):
         raise ValueError('Pendulum applied action must have shape (1,)')
+    if not np.isfinite(action).all():
+        raise ValueError('Pendulum applied action must be finite')
     if np.any(action < PENDULUM_ACTION_BOUNDS[0]) or np.any(action > PENDULUM_ACTION_BOUNDS[1]):
         raise ValueError(f'Pendulum applied action outside {PENDULUM_ACTION_BOUNDS}')
     if obs_next is not None and np.asarray(obs_next).shape != (3,):
