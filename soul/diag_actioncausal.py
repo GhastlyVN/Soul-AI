@@ -106,30 +106,37 @@ def measure(s, rng, shuffle, n_batches=10, shuffle_seed=0):
 
 
 def measure_paired_actions(s, seed, n_batches=10):
-    """Compare real/shuffled actions with identical latent-noise and replay streams."""
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-    cpu_rng_state = torch.get_rng_state()
-    cuda_rng_states = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    """Compare paired interventions without changing the caller's global RNG state."""
+    cuda_devices = (
+        list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
+    )
+    # The context restores the caller's CPU and CUDA RNG states even if either
+    # measurement raises. Inside it, both interventions still start from the
+    # same seeded latent-noise stream.
+    with torch.random.fork_rng(devices=cuda_devices):
+        torch.manual_seed(seed)
+        if cuda_devices:
+            torch.cuda.manual_seed_all(seed)
+        cpu_rng_state = torch.get_rng_state()
+        cuda_rng_states = torch.cuda.get_rng_state_all() if cuda_devices else None
 
-    real = measure(
-        s,
-        np.random.default_rng(seed),
-        False,
-        n_batches=n_batches,
-        shuffle_seed=seed + 1,
-    )
-    torch.set_rng_state(cpu_rng_state)
-    if cuda_rng_states is not None:
-        torch.cuda.set_rng_state_all(cuda_rng_states)
-    shuffled = measure(
-        s,
-        np.random.default_rng(seed),
-        True,
-        n_batches=n_batches,
-        shuffle_seed=seed + 1,
-    )
+        real = measure(
+            s,
+            np.random.default_rng(seed),
+            False,
+            n_batches=n_batches,
+            shuffle_seed=seed + 1,
+        )
+        torch.set_rng_state(cpu_rng_state)
+        if cuda_rng_states is not None:
+            torch.cuda.set_rng_state_all(cuda_rng_states)
+        shuffled = measure(
+            s,
+            np.random.default_rng(seed),
+            True,
+            n_batches=n_batches,
+            shuffle_seed=seed + 1,
+        )
     return real, shuffled
 
 

@@ -71,6 +71,32 @@ class ActionShuffleTests(unittest.TestCase):
         self.assertTrue(torch.equal(first_draws[0][1], first_draws[1][1]))
         self.assertEqual(first_draws[0][2], first_draws[1][2])
 
+
+    def test_paired_measurements_restore_the_callers_rng_state(self):
+        torch.manual_seed(991)
+        before = torch.get_rng_state().clone()
+
+        with patch(
+            "soul.diag_actioncausal.measure",
+            side_effect=lambda *_args, **_kwargs: float(torch.rand(())),
+        ):
+            measure_paired_actions(None, seed=123, n_batches=1)
+
+        self.assertTrue(torch.equal(before, torch.get_rng_state()))
+
+    def test_paired_measurements_restore_rng_state_when_measurement_fails(self):
+        torch.manual_seed(992)
+        before = torch.get_rng_state().clone()
+
+        with patch(
+            "soul.diag_actioncausal.measure",
+            side_effect=RuntimeError("synthetic measurement failure"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "synthetic measurement failure"):
+                measure_paired_actions(None, seed=123, n_batches=1)
+
+        self.assertTrue(torch.equal(before, torch.get_rng_state()))
+
     def test_shuffle_rejects_incompatible_shapes(self):
         with self.assertRaisesRegex(ValueError, r"actions must be"):
             _shuffle_action_timesteps(torch.zeros(2, 3), torch.ones(2, 3))
