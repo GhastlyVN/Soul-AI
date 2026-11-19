@@ -50,6 +50,26 @@ class G31TrainDataTests(unittest.TestCase):
         self.assertEqual(len({row["episode_id"] for row in rows}), 5)
         self.assertEqual(len(digest), 64)
 
+    def test_applied_action_must_stay_within_pendulum_bounds(self):
+        for action in (-2.0001, 2.0001):
+            with self.subTest(action=action):
+                row = valid_row()
+                row["applied_action"] = [action]
+                path, _ = self._load_row(row)
+
+                with self.assertRaisesRegex(ValueError, "applied action outside"):
+                    load_train_jsonl_snapshot(path)
+
+    def test_applied_action_accepts_both_inclusive_bounds(self):
+        for action in (-2.0, 2.0):
+            with self.subTest(action=action):
+                row = valid_row()
+                row["applied_action"] = [action]
+                path, _ = self._load_row(row)
+
+                rows, _ = load_train_jsonl_snapshot(path)
+                self.assertEqual(rows[0]["applied_action"], [action])
+
     def test_missing_reward_is_rejected_before_episode_conversion(self):
         row = valid_row()
         row.pop("reward")
