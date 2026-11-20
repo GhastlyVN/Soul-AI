@@ -111,6 +111,24 @@ def read_file_snapshot(path, max_bytes):
     return raw, hashlib.sha256(raw).hexdigest()
 
 
+def _observation_vector(value, source: Path, line_no: int):
+    """Validate raw JSON numbers before NumPy can coerce booleans or numeric strings."""
+    if not isinstance(value, list) or len(value) != PENDULUM_OBS_SHAPE[0]:
+        raise ValueError(f'bad observation shape at {source}:{line_no}')
+    if any(
+        isinstance(component, bool) or not isinstance(component, (int, float))
+        for component in value
+    ):
+        raise ValueError(f'invalid observation value at {source}:{line_no}')
+    try:
+        observation = np.asarray(value, dtype=np.float32)
+    except (OverflowError, TypeError, ValueError) as error:
+        raise ValueError(f'invalid observation value at {source}:{line_no}') from error
+    if not np.isfinite(observation).all():
+        raise ValueError(f'nonfinite observation at {source}:{line_no}')
+    return observation
+
+
 def load_train_jsonl_snapshot(path: str):
     """Parse and hash one bounded TRAIN snapshot; the digest describes these exact rows."""
     source = Path(path)
@@ -135,10 +153,8 @@ def load_train_jsonl_snapshot(path: str):
             raise ValueError(f'invalid timestep at {source}:{line_no}')
         if not isinstance(row.get('terminal'), bool):
             raise ValueError(f'terminal must be a boolean at {source}:{line_no}')
-        before = np.asarray(row['raw_observation_before'], dtype=np.float32)
-        after = np.asarray(row['raw_observation_after'], dtype=np.float32)
-        if before.shape != PENDULUM_OBS_SHAPE or after.shape != PENDULUM_OBS_SHAPE:
-            raise ValueError(f'bad observation shape at {source}:{line_no}')
+        before = _observation_vector(row['raw_observation_before'], source, line_no)
+        after = _observation_vector(row['raw_observation_after'], source, line_no)
         try:
             action = validate_pendulum_action(row['applied_action'], field='applied action')
         except ValueError as error:

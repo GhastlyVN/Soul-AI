@@ -50,6 +50,20 @@ class G31TrainDataTests(unittest.TestCase):
         self.assertEqual(len({row["episode_id"] for row in rows}), 5)
         self.assertEqual(len(digest), 64)
 
+    def test_observations_reject_booleans_and_numeric_strings(self):
+        cases = (
+            ("raw_observation_before", ["0.1", 0.0, 0.0]),
+            ("raw_observation_after", [0.1, True, 0.3]),
+        )
+        for field, value in cases:
+            with self.subTest(field=field, value=value):
+                row = valid_row()
+                row[field] = value
+                path, _ = self._load_row(row)
+
+                with self.assertRaisesRegex(ValueError, "invalid observation value"):
+                    load_train_jsonl_snapshot(path)
+
     def test_applied_action_must_stay_within_pendulum_bounds(self):
         for action in (-2.0001, 2.0001):
             with self.subTest(action=action):
