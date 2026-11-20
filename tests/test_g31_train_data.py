@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from soul.g31.train_data import TRAIN_SEEDS, load_train_jsonl_snapshot
+from soul.g31.train_data import TRAIN_SEEDS, load_train_jsonl_snapshot, rows_to_episodes
 
 
 def valid_row():
@@ -101,6 +101,26 @@ class G31TrainDataTests(unittest.TestCase):
                 path, _ = self._load_row(row)
                 with self.assertRaisesRegex(ValueError, 'applied action outside'):
                     load_train_jsonl_snapshot(path)
+    def test_rows_to_episodes_rejects_episode_id_reused_across_seeds(self):
+        first = valid_row()
+        second = valid_row()
+        second["episode_seed"] = 1002
+        second["timestep"] = 1
+
+        with self.assertRaisesRegex(ValueError, "episode_seed changes within episode"):
+            rows_to_episodes([first, second], None, 0)
+
+    def test_rows_to_episodes_rejects_transitions_after_terminal(self):
+        first = valid_row()
+        first["terminal"] = True
+        second = valid_row()
+        second["timestep"] = 1
+        second["raw_observation_before"] = first["raw_observation_after"]
+        second["raw_observation_after"] = [0.2, 0.3, 0.4]
+
+        with self.assertRaisesRegex(ValueError, "terminal transition must be the final timestep"):
+            rows_to_episodes([first, second], None, 0)
+
     def test_missing_reward_is_rejected_before_episode_conversion(self):
         row = valid_row()
         row.pop("reward")
