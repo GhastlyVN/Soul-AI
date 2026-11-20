@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
-from soul.g31.train_data import PENDULUM_ACTION_BOUNDS
+from soul.g31.train_data import validate_pendulum_action
 
 
 @dataclass
@@ -110,16 +110,10 @@ def evaluate_one_step(model, state, obs_current, action_applied,
     Returns physical (theta radians, angular_velocity rad/s) and state.
     ``feature_encoder`` is the persisted ObsEncoder used by the checkpoint.
     """
-    action = np.asarray(action_applied, dtype=np.float32)
+    action = validate_pendulum_action(action_applied)
     current = np.asarray(obs_current, dtype=np.float32)
     if current.shape != (3,):
         raise ValueError('Pendulum observation must have shape (3,)')
-    if action.shape != (1,):
-        raise ValueError('Pendulum applied action must have shape (1,)')
-    if not np.isfinite(action).all():
-        raise ValueError('Pendulum applied action must be finite')
-    if np.any(action < PENDULUM_ACTION_BOUNDS[0]) or np.any(action > PENDULUM_ACTION_BOUNDS[1]):
-        raise ValueError(f'Pendulum applied action outside {PENDULUM_ACTION_BOUNDS}')
     if obs_next is not None and np.asarray(obs_next).shape != (3,):
         raise ValueError('Pendulum next observation must have shape (3,)')
 

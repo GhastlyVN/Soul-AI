@@ -70,6 +70,23 @@ class G31TrainDataTests(unittest.TestCase):
                 rows, _ = load_train_jsonl_snapshot(path)
                 self.assertEqual(rows[0]["applied_action"], [action])
 
+    def test_applied_action_rejects_booleans_and_numeric_strings(self):
+        for action in (True, '1.0'):
+            with self.subTest(action=action):
+                row = valid_row()
+                row['applied_action'] = [action]
+                path, _ = self._load_row(row)
+                with self.assertRaisesRegex(ValueError, 'numeric value'):
+                    load_train_jsonl_snapshot(path)
+
+    def test_action_bounds_are_checked_before_float32_rounding(self):
+        for action in (-2.00000001, 2.00000001):
+            with self.subTest(action=action):
+                row = valid_row()
+                row['applied_action'] = [action]
+                path, _ = self._load_row(row)
+                with self.assertRaisesRegex(ValueError, 'applied action outside'):
+                    load_train_jsonl_snapshot(path)
     def test_missing_reward_is_rejected_before_episode_conversion(self):
         row = valid_row()
         row.pop("reward")
