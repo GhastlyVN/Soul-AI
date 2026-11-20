@@ -24,7 +24,7 @@ Not claimed: Statistical significance, causation, generalization, model-quality 
 
 ### Checkpoints — Identity Verified; Approval Required
 - A: artifacts/g31/g31_verified_train_checkpoint.pt (sha256=0fd3fbc46eadd3e6dc4b2d9af873f62ef4c5a04477bfedd06b8565d704b32147, 3386259 bytes)
-- B1: artifacts/g31/g31_b1_checkpoint.pt (sha256=136017b650fc910043c559822d47fea900391e3da44, 3383579 bytes)
+- B1: artifacts/g31/g31_b1_checkpoint.pt (sha256=136017b650fc910043c559822d47fea900391e2823324413327de815a4d8c018, 3383579 bytes)
 - Both verified by runtime sha256; both contain config_dict, enc_schema, model_state_dict, optimizer_state_dict, training_updates; no Confirm-derived fields
 - Protocol claim (plan.md): "Checkpoint VALID FOR PILOT" — describes validity; does not approve specific hashes for confirmatory use
 - Implementation verified: score_pilot.py computes checkpoint_sha256 at runtime (not hardcoded)

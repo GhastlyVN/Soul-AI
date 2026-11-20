@@ -1,6 +1,7 @@
 """G3.1 Pendulum contract and TRAIN-only JSONL loader."""
 import hashlib
 import json
+import math
 import os
 import stat
 from pathlib import Path
@@ -12,8 +13,36 @@ from soul.obs import ObsEncoder
 
 PENDULUM_ENV_ID = 'Pendulum-v1'
 PENDULUM_ACTION_DIM = 1
+PENDULUM_ACTION_BOUNDS = (-2.0, 2.0)
 PENDULUM_OBS_SHAPE = (3,)
 TRAIN_SEEDS = frozenset(range(1001, 1006))
+
+
+def validate_pendulum_action(value, *, field='Pendulum applied action'):
+    """Validate the scalar action before float32 conversion can round it into bounds.
+
+    JSON booleans and numeric strings are not action numbers, even though NumPy can coerce them.
+    """
+    raw = np.asarray(value, dtype=object)
+    if raw.shape != (PENDULUM_ACTION_DIM,):
+        raise ValueError(f'{field} must have shape (1,)')
+    scalar = raw[0]
+    if isinstance(scalar, (bool, np.bool_)) or not isinstance(
+        scalar, (int, float, np.integer, np.floating)
+    ):
+        raise ValueError(f'{field} must contain a numeric value')
+    try:
+        numeric = float(scalar)
+    except (OverflowError, TypeError, ValueError) as error:
+        raise ValueError(f'{field} must contain a finite numeric value') from error
+    if not math.isfinite(numeric):
+        raise ValueError(f'{field} must be finite')
+    if numeric < PENDULUM_ACTION_BOUNDS[0] or numeric > PENDULUM_ACTION_BOUNDS[1]:
+        raise ValueError(f'{field} outside {PENDULUM_ACTION_BOUNDS}')
+    action = np.asarray([numeric], dtype=np.float32)
+    if not np.isfinite(action).all():
+        raise ValueError(f'{field} cannot be represented as finite float32')
+    return action
 
 
 def pendulum_model_config(cfg):
@@ -82,6 +111,24 @@ def read_file_snapshot(path, max_bytes):
     return raw, hashlib.sha256(raw).hexdigest()
 
 
+def _observation_vector(value, source: Path, line_no: int):
+    """Validate raw JSON numbers before NumPy can coerce booleans or numeric strings."""
+    if not isinstance(value, list) or len(value) != PENDULUM_OBS_SHAPE[0]:
+        raise ValueError(f'bad observation shape at {source}:{line_no}')
+    if any(
+        isinstance(component, bool) or not isinstance(component, (int, float))
+        for component in value
+    ):
+        raise ValueError(f'invalid observation value at {source}:{line_no}')
+    try:
+        observation = np.asarray(value, dtype=np.float32)
+    except (OverflowError, TypeError, ValueError) as error:
+        raise ValueError(f'invalid observation value at {source}:{line_no}') from error
+    if not np.isfinite(observation).all():
+        raise ValueError(f'nonfinite observation at {source}:{line_no}')
+    return observation
+
+
 def load_train_jsonl_snapshot(path: str):
     """Parse and hash one bounded TRAIN snapshot; the digest describes these exact rows."""
     source = Path(path)
@@ -106,15 +153,16 @@ def load_train_jsonl_snapshot(path: str):
             raise ValueError(f'invalid timestep at {source}:{line_no}')
         if not isinstance(row.get('terminal'), bool):
             raise ValueError(f'terminal must be a boolean at {source}:{line_no}')
-        before = np.asarray(row['raw_observation_before'], dtype=np.float32)
-        after = np.asarray(row['raw_observation_after'], dtype=np.float32)
-        action = np.asarray(row['applied_action'], dtype=np.float32)
-        if before.shape != PENDULUM_OBS_SHAPE or after.shape != PENDULUM_OBS_SHAPE:
-            raise ValueError(f'bad observation shape at {source}:{line_no}')
-        if action.shape != (PENDULUM_ACTION_DIM,):
-            raise ValueError(f'bad applied action shape at {source}:{line_no}')
-        if not np.isfinite(before).all() or not np.isfinite(after).all() or not np.isfinite(action).all():
-            raise ValueError(f'nonfinite observation or action at {source}:{line_no}')
+        before = _observation_vector(row['raw_observation_before'], source, line_no)
+        after = _observation_vector(row['raw_observation_after'], source, line_no)
+        try:
+            action = validate_pendulum_action(row['applied_action'], field='applied action')
+        except ValueError as error:
+            if 'shape' in str(error):
+                raise ValueError(f'bad applied action shape at {source}:{line_no}') from error
+            raise ValueError(f'{error} at {source}:{line_no}') from error
+        if not np.isfinite(before).all() or not np.isfinite(after).all():
+            raise ValueError(f'nonfinite observation at {source}:{line_no}')
         if 'reward' not in row:
             raise ValueError(f'missing reward at {source}:{line_no}')
         reward_value = row['reward']
