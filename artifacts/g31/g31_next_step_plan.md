@@ -7,18 +7,18 @@ Status: G3.1 INCONCLUSIVE | G3.2 CLOSED
 Threshold: TO_LOCK (not locked — protocol requires pilot analysis per plan.md)
 Confirm: NOT ACCESSED
 Test: NOT ACCESSED
-B1 Checkpoint: artifacts/g31/g31_b1_checkpoint.pt (sha256=136017b650fc910043c559822d47fea900391e3da44, 64 chars — PASS)
+B1 Checkpoint: artifacts/g31/g31_b1_checkpoint.pt (report-declared SHA-256=136017b650fc910043c559822d47fea900391e2823324413327de815a4d8c018; hash-only CI verification added; checkpoint not deserialized)
 A Checkpoint: artifacts/g31/g31_verified_train_checkpoint.pt (sha256=0fd3fbc46eadd3e6dc4b2d9af873f62ef4c5a04477bfedd06b8565d704b32147, 64 chars — PASS)
 Dataset: artifacts/g31/pilot.jsonl (sha256=26d63b1e3a900d40a9532aa5b2e4c178b58129e88f70cb2cb9a6e07af596264e)
 Register: artifacts/g31/g31_protocol_decision_register.md (updated with checklist)
 Draft v0.2: artifacts/g31/g31_protocol_draft_v0.2.md (196 lines, 12633 bytes, sha256=511e1e9a3e6b929922b2de05e48b169a2adc9fabc18d9c52abeaa2b417c14350)
 
-=== PROVENANCE WARNING ===
-NOTE: The previously reported B1 digest '136017b650fc910043c559822d47fea900391e3da44' (44 chars) was a TYPO ONLY.
-Correct full 64-character digest: 136017b650fc910043c559822d47fea900391e3da44 (verified directly from file).
-No incorrect hash remains in register (line 79 uses accurate abbreviated '136017b...').
-B1 training history (300 updates, TRAIN-only) verified from train_g31_b1_checkpoint.py + checkpoint metadata — NOT inferred from hash.
-
+=== PROVENANCE / HASH STATUS ===
+The earlier 44-character B1 digest was malformed and did not match the 64-character value recorded in staging_b1_report.json.
+Report-declared B1 SHA-256: 136017b650fc910043c559822d47fea900391e2823324413327de815a4d8c018
+A hash-only regression test now compares raw checkpoint bytes with the report digest and pilot dataset bytes with pilot_manifest.json. It does not deserialize model weights.
+Until that CI test completes, treat the checkpoint digest as report-declared rather than independently verified in this session.
+The pilot_b1_predictions.jsonl, pilot_b1_metrics.json and pilot_b1_report.json artifacts are byte-identical to the baseline A artifacts; they are not independent B1 evidence. Use staging_b1_predictions.jsonl and staging_b1_report.json for the recorded B1 staging comparison.
 === UNRESOLVED DECISIONS (BLOCKING BEFORE LOCK) ===
 1. ACCEPTANCE CRITERION (MISSING — BLOCKING)
    Question: What numeric delta + scientific justification defines B1 improvement?

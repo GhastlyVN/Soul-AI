@@ -1,187 +1,42 @@
-@nguyenphuck2468-tech ➜ /workspaces/Soul-AI (main) $  cat << 'EOF'
-=== G3.1 PROTOCOL DECISION REGISTER — AUDIT-ONLY ===
-MODE: read-only; zero edits; Confirm NOT ACCESSED; TEST NOT ACCESSED; threshold
-TO_LOCK; gate INCONCLUSIVE
+# G3.1 Protocol Decision Register — audit-only
 
---- ITEM 1: PRIMARY METRIC (theta RMSE) ---
-Technical fact: evaluator.py physical_metrics defines theta_rmse = sqrt(mean(wra
-pped_angle_error(pred[:,0], tgt[:,0])**2)) — verified
-Protocol statement: plan.md line 62 describes 'metrics (per-episode equal weight
-)' — describes, does not approve metric choice
-Owner approval: NONE (no explicit 'primary metric = theta RMSE' approval in plan
-.md or manifest)
-Evidence: soul/g31/evaluator.py:32-39; artifacts/g31/pilot_metrics.json; artifac
-ts/g31/staging_b1_metrics.json
-Status: OWNER DECISION REQUIRED — confirm theta RMSE as primary; if velocity als
-o required, specify weight
+Status: G3.1 INCONCLUSIVE | threshold TO_LOCK | Confirm NOT ACCESSED | no protocol lock or confirmatory claim.
+G3.2 is recorded as CLOSED in the existing plan; this register does not change that state.
 
---- ITEM 2: AGGREGATION (mean per-episode) ---
-Technical fact: score_pilot.py aggregate_episode_metrics computes mean/median/di
-spersion of per-episode values — verified
-Protocol statement: plan.md line 62 'per-episode equal weight' — descriptive
-Owner approval: NONE (no approval of mean vs median vs pooled)
-Evidence: soul/g31/score_pilot.py:83-94; reproduced exact (A=1.3707175, B1=1.403
-5570)
-Status: OWNER DECISION REQUIRED — confirm mean of per-episode RMSE; specify if m
-edian/dispersion required
+This register records evidence and unresolved owner decisions. It is not an approval, authorization, training instruction, or permission to access Confirm/TEST.
 
---- ITEM 3: COMPARISON DIRECTION (B1 vs A) ---
-Technical fact: score_pilot.py paired_differences computes model - baseline — ve
-rified
-EOFifacts: unchanged; no edits; no new commits; no experiments run 10, 9, 11, 4)
-=== G3.1 PROTOCOL DECISION REGISTER — AUDIT-ONLY ===
-MODE: read-only; zero edits; Confirm NOT ACCESSED; TEST NOT ACCESSED; threshold
-TO_LOCK; gate INCONCLUSIVE
+## Evidence and integrity facts
 
---- ITEM 1: PRIMARY METRIC (theta RMSE) ---
-Technical fact: evaluator.py physical_metrics defines theta_rmse = sqrt(mean(wra
-pped_angle_error(pred[:,0], tgt[:,0])**2)) — verified
-Protocol statement: plan.md line 62 describes 'metrics (per-episode equal weight
-)' — describes, does not approve metric choice
-Owner approval: NONE (no explicit 'primary metric = theta RMSE' approval in plan
-.md or manifest)
-Evidence: soul/g31/evaluator.py:32-39; artifacts/g31/pilot_metrics.json; artifac
-ts/g31/staging_b1_metrics.json
-Status: OWNER DECISION REQUIRED — confirm theta RMSE as primary; if velocity als
-o required, specify weight
+- `artifacts/g31/pilot.jsonl` contains 100 transitions across five episodes (seeds 2001–2005), Pendulum-v1 / Gymnasium 1.4.0, observation shape `[3]`, action shape `[1]`, action bounds `[-2, 2]`, and `bounded_uniform` collection. Its raw-byte SHA-256 was computed in this audit and matches `pilot_manifest.json`: `26d63b1e3a900d40a9532aa5b2e4c178b58129e88f70cb2cb9a6e07af596264e`.
+- `pilot_manifest.json` says `dataset_status = NEW DATASET — NOT ORIGINAL`, `confirm_accessed = false`, and `scored = false`. The provenance wording still needs owner clarification; no interpretation is assumed.
+- Candidate A is recorded as `g31_verified_train_checkpoint.pt` (3,386,259 bytes; report SHA-256 `0fd3fbc46eadd3e6dc4b2d9af873f62ef4c5a04477bfedd06b8565d704b32147`). B1 is recorded as `g31_b1_checkpoint.pt` (3,383,579 bytes; report SHA-256 `136017b650fc910043c559822d47fea900391e2823324413327de815a4d8c018`). These are report-declared digests; a hash-only CI test now checks raw bytes against the reports. No checkpoint was deserialized in this audit.
+- The previous 44-character B1 digest was malformed and did not match the report's 64-character value. Do not reuse it.
+- `pilot_b1_predictions.jsonl`, `pilot_b1_metrics.json`, and `pilot_b1_report.json` have the same Git blob identities as the baseline A prediction, metrics, and report files. They are copies, not independent B1 evidence.
+- `staging_b1_predictions.jsonl` contains 100 rows with the same `(episode_id, timestep)` keys, applied actions, and physical targets as the baseline predictions; `predicted_physical` differs in all 100 rows. Its per-row checkpoint digest matches the staging report's B1 digest.
+- Recorded descriptive mean theta RMSE is 1.3707174687 for A and 1.4035570433 for staging B1 over five pilot episodes. This is not a significance test, acceptance decision, or confirmatory result; the gate remains INCONCLUSIVE and the threshold remains TO_LOCK.
+- No Confirm/TEST run, training run, benchmark, or model-weight deserialization was performed in this session.
 
---- ITEM 2: AGGREGATION (mean per-episode) ---
-Technical fact: score_pilot.py aggregate_episode_metrics computes mean/median/di
-spersion of per-episode values — verified
-Protocol statement: plan.md line 62 'per-episode equal weight' — descriptive
-Owner approval: NONE (no approval of mean vs median vs pooled)
-Evidence: soul/g31/score_pilot.py:83-94; reproduced exact (A=1.3707175, B1=1.403
-5570)
-Status: OWNER DECISION REQUIRED — confirm mean of per-episode RMSE; specify if m
-edian/dispersion required
+## Owner decisions still unresolved
 
---- ITEM 3: COMPARISON DIRECTION (B1 vs A) ---
-Technical fact: score_pilot.py paired_differences computes model - baseline — ve
-rified
-Protocol statement: none explicit
-Owner approval: NONE
-Evidence: soul/g31/score_pilot.py:96-108; artifacts/g31/pilot_b1_predictions.jso
-nl (invalid, copy of A); artifacts/g31/staging_b1_predictions.jsonl (valid B1)
-Status: OWNER DECISION REQUIRED — confirm B1 vs A; specify if absolute or relati
-ve difference
+1. Primary metric: approve theta RMSE, velocity RMSE, or a defined combination and rationale.
+2. Aggregation: approve equal-episode mean, median, pooled metric, and required dispersion reporting.
+3. Comparison direction and pairing: approve B1-versus-A direction and the `(episode_id, timestep)` pairing contract.
+4. Dataset provenance: clarify whether `NEW DATASET — NOT ORIGINAL` is expected and whether it is eligible for confirmatory use.
+5. Sample size: justify five episodes / 100 transitions or specify a larger confirmatory sample.
+6. Acceptance criterion: define a numeric threshold and independent scientific justification before examining confirmatory results.
+7. Statistical analysis: explicitly permit or prohibit tests; if permitted, define method, alpha, and multiple-comparison handling.
+8. Missing/non-finite/exclusion policy: define whether invalid predictions abort or are excluded and how exclusions are reported.
+9. Stop/abort/rollback: define failure thresholds and recovery rules.
+10. Evaluator versioning: decide whether the evaluator source hash/version must be frozen for confirmation.
+11. Checkpoint approval: approve exact A/B1 checkpoint identities for confirmatory use.
+12. Confirm authorization: explicit owner authorization is required before any Confirm access.
 
---- ITEM 4: PAIRING UNIT ---
-Technical fact: (episode_id, timestep) pairing verified — 100 keys equal, 5×20,
-targets/actions identical
-Protocol statement: none explicit
-Owner approval: NONE
-Evidence: artifacts/g31/pilot_predictions.jsonl + staging_b1_predictions.jsonl;
-pairing verified (0 mismatches)
-Status: ALREADY DOCUMENTED (pairing method is implementation; no protocol approv
-al needed if owner accepts)
+## Guardrails
 
---- ITEM 5: CHECKPOINT SELECTION & PROVENANCE ---
-Technical fact: A=0fd3fbc... (g31_verified_train_checkpoint.pt); B1=136017b... (
-g31_b1_checkpoint.pt); both verified by sha256; B1 has config_dict/enc_schema/mo
-del_state_dict/optimizer_state_dict/training_updates; no Confirm fields
-Protocol statement: plan.md 'Checkpoint VALID FOR PILOT'; manifest integrity PAS
-S
-Owner approval: NONE (protocol claims valid but does not approve specific hashes
-)
-Evidence: artifacts/g31/g31_verified_train_checkpoint.pt; artifacts/g31/g31_b1_c
-heckpoint.pt; artifacts/g31/pilot_manifest.json
-Status: EVIDENCE REQUIRED — identity verified; approval of specific checkpoints
-for confirmatory use requires owner sign-off
+- Keep pilot and confirmatory data separate.
+- Do not use the byte-identical `pilot_b1_*` artifacts as B1 evidence.
+- Do not infer improvement or statistical significance from the five-episode staging report.
+- Do not lock a threshold based on observed pilot values.
+- Do not access Confirm or TEST, retrain, replace checkpoints, or alter datasets without the required protocol and authorization.
 
---- ITEM 6: DATASET PROVENANCE ---
-Technical fact: pilot.jsonl hash 26d63b1e...; split=pilot; seeds 2001-2005; 100
-lines; observation_shape [3]; action_shape [1]; bounds [-2,2]; collection_policy
- bounded_uniform; dataset_status='NEW DATASET — NOT ORIGINAL'
-Protocol statement: plan.md 'PILOT: seeds 2001-2005; not accessed'; manifest int
-egrity PASS
-Owner approval: NONE (dataset is new, not original — informational note)
-Evidence: artifacts/g31/pilot.jsonl; artifacts/g31/pilot_manifest.json; pilot_ma
-nifest.json (root)
-Status: EVIDENCE REQUIRED — dataset identity verified; 'NOT ORIGINAL' note requi
-res owner clarification (is this expected?)
-
---- ITEM 7: SAMPLE / SEED / SIZE ---
-Technical fact: 5 episodes, 20 transitions/episode, 100 total; seeds 2001-2005;
-train seeds 1001-1005 disjoint
-Protocol statement: plan.md lines 107, 123; manifest seeds_train/seeds_pilot
-Owner approval: NONE (no sample-size rationale documented)
-Evidence: pilot_manifest.json; artifacts/g31/train.jsonl; artifacts/g31/pilot.js
-onl
-Status: OWNER DECISION REQUIRED — confirm 5/20 sufficient for confirmatory evalu
-ation; if not, specify required size
-
---- ITEM 8: NON-FINITE / MISSING / EXCLUSIONS / ABORT ---
-Technical fact: score_pilot raises ValueError if non-finite; no exclusion logic;
- no abort conditions; all 100 predictions finite
-Protocol statement: NONE (plan.md does not specify exclusion/abort rules)
-Owner approval: NONE
-Evidence: soul/g31/score_pilot.py (ValueError); artifacts/g31/staging_b1_predict
-ions.jsonl (all finite)
-Status: OWNER DECISION REQUIRED — specify: exclude non-finite? abort on failure?
- rollback conditions?
-
---- ITEM 8b: EVALUATOR VERSION / REPRODUCIBILITY ---
-Technical fact: evaluator.py has no __version__ or version string; report descri
-bes semantics; source unchanged since audit
-Protocol statement: NONE
-Owner approval: NONE
-Evidence: soul/g31/evaluator.py (no version); artifacts/g31/staging_b1_report.js
-on (evaluator description)
-Status: OWNER DECISION REQUIRED — add version tracking; confirm evaluator frozen
- for confirmatory run
-
---- ITEM 9: STATISTICAL ANALYSIS ---
-Technical fact: none performed; no test defined; no significance claim made
-Protocol statement: NONE (plan.md does not mention statistical analysis)
-Owner approval: NONE
-Evidence: no statistical test artifacts; no protocol reference
-Status: OWNER DECISION REQUIRED — permitted? if yes, specify test (t-test? boots
-trap?); if no, document
-
---- ITEM 10: ACCEPTANCE CRITERION ---
-Technical fact: none defined; TO_LOCK requires criterion; no numeric threshold;
-no scientific justification
-Protocol statement: plan.md 'protocol requires pilot analysis' — describes need,
- not value
-Owner approval: NONE
-Evidence: all reports say 'threshold: TO_LOCK'; plan.md line 50 'No threshold wa
-s locked'
-Status: OWNER DECISION REQUIRED — define numeric delta + scientific justificatio
-n (e.g., theta RMSE improvement ≥ X% with Y confidence)
-
---- ITEM 11: STOP / ABORT / ROLLBACK ---
-Technical fact: none defined
-Protocol statement: NONE
-Owner approval: NONE
-Evidence: none
-Status: OWNER DECISION REQUIRED — specify conditions (e.g., >Z% predictions non-
-finite, dataset hash mismatch, evaluator version change)
-
---- ITEM 12: CONFIRM ACCESS ---
-Technical fact: manifest confirm_accessed=false; no Confirm artifacts in artifac
-ts/g31/; no Confirm-derived metrics
-Protocol statement: plan.md 'Confirm: NOT RUN'; 'Confirm NOT run'
-Owner approval: LOCKED (not accessed; protocol requires it remain closed until l
-ock)
-Evidence: artifacts/g31/pilot_manifest.json; plan.md; all reports
-Status: LOCKED (state correct; authorization for future access requires owner)
-
---- SUMMARY: SMALLEST SET OF OWNER DECISIONS BEFORE LOCK ---
-1. Acceptance criterion (numeric delta + justification) — BLOCKING
-2. Statistical analysis permitted? (yes/no + test) — BLOCKING
-3. Stop/abort/rollback conditions — BLOCKING
-4. Confirm access authorization (when to open) — BLOCKING (for confirmatory comp
-arison)
-5. Evaluator version tracking — NON-BLOCKING (minor)
-6. Dataset 'NOT ORIGINAL' clarification — NON-BLOCKING (informational)
-
---- DECISION ---
-NOT READY TO LOCK — blocked by MISSING protocol definitions (items 10, 9, 11, 4)
-, not by data/evaluator errors.
-
---- CONFIRM / TEST / THRESHOLD / ARTIFACT STATUS ---
-Confirm: NOT ACCESSED (verified)
-TEST seeds: NOT ACCESSED (verified)
-Threshold: TO_LOCK (unchanged)
-Artifacts: unchanged; no edits; no new commits; no experiments run
-@nguyenphuck2468-tech ➜ /workspaces/Soul-AI (main) $ 
+Decision: NOT READY TO LOCK. No owner choices have been made on their behalf.

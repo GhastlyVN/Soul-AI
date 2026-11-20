@@ -3,10 +3,13 @@
 # Confirm NOT ACCESSED | TEST NOT ACCESSED | threshold TO_LOCK | Gate G3.1 INCONCLUSIVE
 
 === PROVENANCE ===
-B1 SHA-256 (direct from artifacts/g31/g31_b1_checkpoint.pt): 136017b650fc910043c559822d47fea900391e3da44 (64 chars) — PASS
-Previous truncated report (44 chars): TYPO ONLY — corrected
+B1 SHA-256 recorded in staging_b1_report.json: 136017b650fc910043c559822d47fea900391e2823324413327de815a4d8c018 (64 hex characters; raw-byte verification is covered by the new hash-only CI test; no deserialization)
+Earlier 44-character value was malformed and did not match the report's 64-character digest; it is not a valid SHA-256 value.
 B1 training history (300 updates, TRAIN-only): EVIDENCE FROM train_g31_b1_checkpoint.py + checkpoint metadata (training_updates, split='train', dataset_path) — NOT inferred from hash
 A SHA-256 (direct): 0fd3fbc46eadd3e6dc4b2d9af873f62ef4c5a04477bfedd06b8565d704b32147 (64 chars) — PASS
+
+=== PILOT ARTIFACT CLASSIFICATION ===
+The pilot_b1_predictions.jsonl, pilot_b1_metrics.json and pilot_b1_report.json files are byte-identical to the baseline A artifacts. They are not independent B1 evidence. The separate staging_b1_predictions.jsonl and staging_b1_report.json files contain the recorded B1 staging output; their comparison remains exploratory and INCONCLUSIVE.
 
 === STATUS ===
 G3.1: INCONCLUSIVE
