@@ -1,7 +1,7 @@
 import hashlib
 import io
-import os
 import json
+import os
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
@@ -281,7 +281,7 @@ def test_rejects_archive_path_replacement_after_open(tmp_path: Path, monkeypatch
         return descriptor
 
     monkeypatch.setattr(inspector.os, "open", replace_after_open)
-    with pytest.raises(ValueError, match="ZIP archive changed during inspection"):
+    with pytest.raises(ValueError, match="ZIP archive changed while it was being opened"):
         inspect_package(archive)
     assert replaced
 
