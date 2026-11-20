@@ -1,5 +1,6 @@
 import hashlib
 import io
+import os
 import json
 import zipfile
 from pathlib import Path
@@ -228,6 +229,61 @@ def test_rejects_symlink_entries(tmp_path: Path):
         zf.writestr(info, "target")
     with pytest.raises(ValueError, match="symlink entry refused"):
         inspect_package(archive)
+
+
+def test_rejects_symlink_archive_input(tmp_path: Path):
+    archive = tmp_path / "source.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", '{"schema_version":1}')
+    alias = tmp_path / "alias.zip"
+    try:
+        alias.symlink_to(archive)
+    except (OSError, NotImplementedError) as error:
+        pytest.skip(f"symlinks are unavailable: {error}")
+
+    with pytest.raises(ValueError, match="regular non-symlink ZIP archive"):
+        inspect_package(alias)
+
+
+def test_rejects_fifo_archive_input_before_opening(tmp_path: Path):
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("FIFO creation is unavailable on this platform")
+    fifo = tmp_path / "archive.pipe"
+    os.mkfifo(fifo)
+
+    with patch.object(
+        inspector.os,
+        "open",
+        side_effect=AssertionError("special files must be rejected before open"),
+    ):
+        with pytest.raises(ValueError, match="regular non-symlink ZIP archive"):
+            inspect_package(fifo)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="open-file replacement semantics differ on Windows")
+def test_rejects_archive_path_replacement_after_open(tmp_path: Path, monkeypatch):
+    archive = tmp_path / "source.zip"
+    replacement = tmp_path / "replacement.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", '{"schema_version":1}')
+    with zipfile.ZipFile(replacement, "w") as zf:
+        zf.writestr("manifest.json", '{"schema_version":2}')
+
+    original_open = os.open
+    replaced = False
+
+    def replace_after_open(path, flags, *args, **kwargs):
+        nonlocal replaced
+        descriptor = original_open(path, flags, *args, **kwargs)
+        if Path(path) == archive and not replaced:
+            os.replace(replacement, archive)
+            replaced = True
+        return descriptor
+
+    monkeypatch.setattr(inspector.os, "open", replace_after_open)
+    with pytest.raises(ValueError, match="ZIP archive changed during inspection"):
+        inspect_package(archive)
+    assert replaced
 
 
 
