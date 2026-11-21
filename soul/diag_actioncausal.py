@@ -346,7 +346,7 @@ def load_checkpoint_snapshot(soul, checkpoint_path, expected_sha256=None):
                 or not stat.S_ISREG(before.st_mode)
                 or _checkpoint_file_identity(before) != _checkpoint_file_identity(path_before)
             ):
-                raise ValueError('diagnostic checkpoint changed while it was being opened')
+                raise ValueError('diagnostic checkpoint path changed while it was being opened')
             try:
                 path_after_open = checkpoint_path.lstat()
             except OSError as error:
