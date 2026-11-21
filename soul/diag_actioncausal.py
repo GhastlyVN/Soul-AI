@@ -163,6 +163,9 @@ def measure_ablation(s, seed, n_batches=10, interventions=INTERVENTIONS):
     kinds = tuple(interventions)
     if not kinds or len(set(kinds)) != len(kinds):
         raise ValueError('interventions must be a non-empty list of unique names')
+    for kind in kinds:
+        if kind not in INTERVENTIONS:
+            raise ValueError(f'unknown action intervention: {kind!r}')
     cuda_devices = (
         list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
     )
