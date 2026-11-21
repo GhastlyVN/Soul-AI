@@ -110,6 +110,29 @@ class G31TrainDataTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "episode_seed changes within episode"):
             rows_to_episodes([first, second], None, 0)
 
+    def test_loader_rejects_multiple_episodes_for_one_train_seed(self):
+        first = valid_row()
+        second = valid_row()
+        second["episode_id"] = "train_ep1001_duplicate"
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / "train.jsonl"
+        path.write_text(
+            "\\n".join(json.dumps(row) for row in (first, second)) + "\\n",
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(ValueError, "assigned to multiple episodes"):
+            load_train_jsonl_snapshot(path)
+
+    def test_rows_to_episodes_rejects_seed_reused_by_multiple_episode_ids(self):
+        first = valid_row()
+        second = valid_row()
+        second["episode_id"] = "train_ep1001_duplicate"
+
+        with self.assertRaisesRegex(ValueError, "assigned to multiple episodes"):
+            rows_to_episodes([first, second], None, 0)
+
     def test_rows_to_episodes_rejects_transitions_after_terminal(self):
         first = valid_row()
         first["terminal"] = True

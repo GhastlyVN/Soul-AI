@@ -134,6 +134,7 @@ def load_train_jsonl_snapshot(path: str):
     source = Path(path)
     raw, digest = read_file_snapshot(source, MAX_TRAIN_JSONL_BYTES)
     rows = []
+    episode_for_seed = {}
     for line_no, line in enumerate(raw.decode('utf-8').splitlines(), 1):
         row = parse_jsonl_object(line, source, line_no)
         if row.get('split') != 'train':
@@ -148,6 +149,12 @@ def load_train_jsonl_snapshot(path: str):
         episode_id = row.get('episode_id')
         if not isinstance(episode_id, str) or not episode_id.strip():
             raise ValueError(f'invalid episode_id at {source}:{line_no}')
+        previous_episode = episode_for_seed.setdefault(episode_seed, episode_id)
+        if previous_episode != episode_id:
+            raise ValueError(
+                f'TRAIN seed {episode_seed} is assigned to multiple episodes: '
+                f'{previous_episode!r} and {episode_id!r}'
+            )
         timestep = row.get('timestep')
         if isinstance(timestep, bool) or not isinstance(timestep, int) or timestep < 0:
             raise ValueError(f'invalid timestep at {source}:{line_no}')
@@ -193,9 +200,16 @@ def rows_to_episodes(rows: List[Dict], encoder: ObsEncoder,
     """Convert validated TRAIN rows without joining episode boundaries."""
     grouped: dict[str, list[Dict]] = {}
     episode_seeds: dict[str, int] = {}
+    seed_episodes: dict[int, str] = {}
     for row in rows:
         episode_id = row['episode_id']
         seed = row['episode_seed']
+        previous_episode = seed_episodes.setdefault(seed, episode_id)
+        if previous_episode != episode_id:
+            raise ValueError(
+                f'TRAIN seed {seed} is assigned to multiple episodes: '
+                f'{previous_episode!r} and {episode_id!r}'
+            )
         previous_seed = episode_seeds.setdefault(episode_id, seed)
         if previous_seed != seed:
             raise ValueError(
