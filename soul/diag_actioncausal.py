@@ -263,6 +263,59 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
+def checkpoint_exists_or_training(path, allow_training=False):
+    """Fail closed unless an existing checkpoint is present or training is explicit."""
+    checkpoint = Path(path)
+    if checkpoint.is_symlink():
+        raise ValueError(f'diagnostic checkpoint must not be a symlink: {checkpoint}')
+    if checkpoint.is_file():
+        return True
+    if allow_training:
+        return False
+    raise FileNotFoundError(
+        f'frozen diagnostic checkpoint is missing: {checkpoint}; '
+        'pass --train-if-missing only for an explicit training run'
+    )
+
+
+def load_checkpoint_snapshot(soul, checkpoint_path, expected_sha256=None):
+    """Hash and load the same disk-backed snapshot, never re-open the source after hashing."""
+    checkpoint_path = Path(checkpoint_path)
+    if checkpoint_path.is_symlink() or not checkpoint_path.is_file():
+        raise ValueError(f'diagnostic checkpoint must be a regular non-symlink file: {checkpoint_path}')
+
+    digest = hashlib.sha256()
+    snapshot_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode='wb',
+            prefix='soul-action-',
+            suffix='.ckpt',
+            delete=False,
+        ) as snapshot:
+            snapshot_path = Path(snapshot.name)
+            with checkpoint_path.open('rb') as source:
+                for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                    digest.update(chunk)
+                    snapshot.write(chunk)
+            snapshot.flush()
+            os.fsync(snapshot.fileno())
+
+        actual_sha256 = digest.hexdigest()
+        if expected_sha256 is not None:
+            expected = expected_sha256.strip().lower()
+            if len(expected) != 64 or any(char not in '0123456789abcdef' for char in expected):
+                raise ValueError('expected checkpoint SHA-256 must be 64 lowercase hexadecimal characters')
+            if actual_sha256 != expected:
+                raise ValueError('diagnostic checkpoint SHA-256 does not match the expected digest')
+
+        soul.load(str(snapshot_path))
+        return actual_sha256
+    finally:
+        if snapshot_path is not None:
+            snapshot_path.unlink(missing_ok=True)
+
+
 def _reject_report_output_aliases(report_path, protected_paths):
     """Refuse report targets that alias the checkpoint or hashed source datasets."""
     report_path = Path(report_path)
@@ -384,10 +437,29 @@ def main():
     ap.add_argument('--matrix', action='store_true',
                     help='measure all action interventions with paired RNG')
     ap.add_argument('--report', help='write a machine-readable JSON report')
-    ap.add_argument('--no-train', action='store_true',
-                    help='refuse to train when the diagnostic checkpoint is absent')
-    ap.add_argument('--train-path', help='optional TRAIN snapshot to hash into the report')
-    ap.add_argument('--pilot-path', help='optional PILOT snapshot to hash into the report')
+    training = ap.add_mutually_exclusive_group()
+    training.add_argument(
+        '--train-if-missing',
+        dest='allow_training',
+        action='store_true',
+        help='explicitly allow a new training run when the diagnostic checkpoint is absent',
+    )
+    training.add_argument(
+        '--no-train',
+        dest='allow_training',
+        action='store_false',
+        help='refuse training when the diagnostic checkpoint is absent (default)',
+    )
+    ap.set_defaults(allow_training=False)
+    ap.add_argument('--expected-checkpoint-sha256', help='optional digest required before checkpoint deserialization')
+    ap.add_argument(
+        '--train-path',
+        help='optional TRAIN path hashed for provenance only; not used as scoring input',
+    )
+    ap.add_argument(
+        '--pilot-path',
+        help='optional PILOT path hashed for provenance only; not used as scoring input',
+    )
     args = ap.parse_args()
     if args.report and not args.matrix:
         ap.error('--report requires --matrix')
@@ -397,20 +469,29 @@ def main():
             _reject_report_output_aliases(Path(args.report), protected_report_inputs)
         except ValueError as error:
             ap.error(str(error))
-    if not os.path.exists(CKPT) and args.no_train:
-        raise SystemExit(f'checkpoint is missing and training is disabled: {CKPT}')
-    if os.path.exists(CKPT):
-        print(f'  Load checkpoint: {CKPT}')
+    try:
+        checkpoint_exists = checkpoint_exists_or_training(CKPT, args.allow_training)
+    except (FileNotFoundError, ValueError) as error:
+        raise SystemExit(str(error)) from error
+    if not checkpoint_exists and args.expected_checkpoint_sha256:
+        raise SystemExit('--expected-checkpoint-sha256 requires an existing checkpoint')
+
+    checkpoint_sha256 = None
+    if checkpoint_exists:
+        print(f'  Load checkpoint snapshot: {CKPT}')
         cfg = Config()
         cfg.model.hidden_dim, cfg.model.latent_dim = 64, 16
         cfg.model.action_dim, cfg.model.discrete_dim = 1, 0
         cfg.train.batch_size, cfg.train.seq_len = 8, 16
         s = Soul(cfg)
-        s.load(CKPT)
+        checkpoint_sha256 = load_checkpoint_snapshot(
+            s, CKPT, expected_sha256=args.expected_checkpoint_sha256
+        )
     else:
-        _banner('Huan 1200 buoc (lan dau)')
+        _banner('Huan 1200 buoc (explicit training opt-in)')
         s = build(args.seed, args.steps, args.warmup_episodes,
                   args.learn_per_collect)
+        checkpoint_sha256 = sha256_file(CKPT)
         print('  xong.')
 
     if args.matrix:
@@ -435,7 +516,10 @@ def main():
                 'interpretation': 'exploratory only; no generalization or promotion claim',
                 'provenance': {
                     'checkpoint_path': str(CKPT),
-                    'checkpoint_sha256': sha256_file(CKPT),
+                    'checkpoint_sha256': checkpoint_sha256,
+                    'checkpoint_loaded_from_existing_file': checkpoint_exists,
+                    'replay_source': 'checkpoint_embedded_replay_buffer',
+                    'external_dataset_paths_used_for_scoring': False,
                     'train_sha256': sha256_file(args.train_path) if args.train_path else None,
                     'pilot_sha256': sha256_file(args.pilot_path) if args.pilot_path else None,
                     'code_commit': os.environ.get('GITHUB_SHA'),
@@ -448,6 +532,11 @@ def main():
                     'interventions': list(INTERVENTIONS),
                 },
                 'summary': summary,
+                'limitations': [
+                    'The matrix samples the replay buffer embedded in the checkpoint.',
+                    'Optional --train-path and --pilot-path values are hashed only; they are not scoring inputs.',
+                    'Physical prediction deltas are not measured by this diagnostic.',
+                ],
             }
             _write_json_report_atomic(
                 report_path, payload, protected_report_inputs
