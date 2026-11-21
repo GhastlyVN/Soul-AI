@@ -17,6 +17,7 @@ import unicodedata
 import zipfile
 
 MAX_ARCHIVE_ENTRIES = 100_000
+MAX_CENTRAL_DIRECTORY_BYTES = 64 * 1024**2
 # The uncompressed total is capped at 8 GiB; allow reasonable ZIP metadata overhead,
 # but do not hash or parse an arbitrarily large input archive.
 MAX_ARCHIVE_BYTES = 9 * 1024**3
@@ -121,6 +122,63 @@ def _hash_archive_bounded(stream, snapshot=None):
     return archive_hash
 
 
+def _preflight_zip_stream(stream, archive_path: Path) -> tuple[int, int]:
+    """Bound ZIP end-record metadata before ZipFile allocates central-directory entries."""
+    try:
+        position = stream.tell()
+    except (AttributeError, OSError) as error:
+        raise ValueError(f"ZIP input must be seekable: {archive_path}") from error
+
+    try:
+        stream.seek(0, os.SEEK_END)
+        file_size = stream.tell()
+        endrec = zipfile._EndRecData(stream)
+        if endrec is None or len(endrec) < 10:
+            raise ValueError(f"ZIP end-of-central-directory record is missing: {archive_path}")
+
+        (
+            disk_number,
+            central_disk,
+            entries_on_disk,
+            entries_total,
+            central_size,
+            central_offset,
+        ) = endrec[1:7]
+        end_record_offset = endrec[9]
+        if disk_number != 0 or central_disk != 0 or entries_on_disk != entries_total:
+            raise ValueError(f"multi-disk ZIP archives are not supported: {archive_path}")
+        if (
+            entries_total == 0xFFFF
+            or central_size == 0xFFFFFFFF
+            or central_offset == 0xFFFFFFFF
+        ):
+            raise ValueError(f"ZIP64 end-of-central-directory record is incomplete: {archive_path}")
+        if entries_total > MAX_ARCHIVE_ENTRIES:
+            raise ValueError(
+                f"too many ZIP entries in {archive_path}: {entries_total} "
+                f"(limit {MAX_ARCHIVE_ENTRIES})"
+            )
+        if central_size > MAX_CENTRAL_DIRECTORY_BYTES:
+            raise ValueError(
+                f"ZIP central directory exceeds the size limit: {central_size} bytes "
+                f"(limit {MAX_CENTRAL_DIRECTORY_BYTES})"
+            )
+        if (
+            central_size < 0
+            or central_offset < 0
+            or central_offset + central_size > file_size
+            or central_offset + central_size > end_record_offset
+        ):
+            raise ValueError(f"ZIP central-directory bounds are invalid: {archive_path}")
+        return entries_total, central_size
+    except ValueError:
+        raise
+    except (OSError, zipfile.BadZipFile, IndexError, TypeError) as error:
+        raise ValueError(f"invalid ZIP end-of-central-directory record: {archive_path}") from error
+    finally:
+        stream.seek(position)
+
+
 def _file_identity(metadata: os.stat_result) -> tuple[int, ...]:
     """Use portable file identity fields; Windows ctime is creation time, not change time."""
     identity = (
@@ -172,6 +230,7 @@ def inspect_package(archive_path: Path) -> dict[str, object]:
             raise ValueError(f"ZIP archive size changed while creating inspection snapshot: {archive_path}")
         snapshot.flush()
         snapshot.seek(0)
+        _preflight_zip_stream(snapshot, archive_path)
         if not zipfile.is_zipfile(snapshot):
             raise ValueError(f"not a readable ZIP archive: {archive_path}")
         snapshot.seek(0)
