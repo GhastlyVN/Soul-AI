@@ -106,6 +106,65 @@ class CheckpointBoundaryTests(unittest.TestCase):
         finally:
             source.unlink(missing_ok=True)
 
+    def test_provenance_hash_rejects_symlink_before_open(self):
+        source = Path(tempfile.gettempdir()) / f'soul-action-provenance-target-{os.getpid()}.bin'
+        alias = Path(tempfile.gettempdir()) / f'soul-action-provenance-link-{os.getpid()}.bin'
+        source.write_bytes(b'provenance')
+        try:
+            try:
+                alias.symlink_to(source)
+            except (OSError, NotImplementedError):
+                self.skipTest('symlink creation is unavailable on this runner')
+            with patch(
+                'soul.diag_actioncausal.os.open',
+                side_effect=AssertionError('a symlink must be rejected before opening'),
+            ):
+                with self.assertRaisesRegex(ValueError, 'regular non-symlink file'):
+                    sha256_file(alias)
+        finally:
+            alias.unlink(missing_ok=True)
+            source.unlink(missing_ok=True)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX FIFO inputs are unavailable on Windows')
+    def test_provenance_hash_rejects_fifo_before_open(self):
+        fifo = Path(tempfile.gettempdir()) / f'soul-action-provenance-fifo-{os.getpid()}'
+        os.mkfifo(fifo)
+        try:
+            with patch(
+                'soul.diag_actioncausal.os.open',
+                side_effect=AssertionError('a FIFO must be rejected before opening'),
+            ):
+                with self.assertRaisesRegex(ValueError, 'regular non-symlink file'):
+                    sha256_file(fifo)
+        finally:
+            fifo.unlink(missing_ok=True)
+
+    @unittest.skipIf(os.name == 'nt', 'open-file replacement semantics differ on Windows')
+    def test_provenance_hash_rejects_path_replacement_after_open(self):
+        source = Path(tempfile.gettempdir()) / f'soul-action-provenance-race-{os.getpid()}.bin'
+        replacement = Path(tempfile.gettempdir()) / f'soul-action-provenance-race-new-{os.getpid()}.bin'
+        source.write_bytes(b'original provenance bytes')
+        replacement.write_bytes(b'replacement provenance bytes')
+        original_open = os.open
+        replaced = False
+
+        def replace_after_open(path, flags, *args, **kwargs):
+            nonlocal replaced
+            descriptor = original_open(path, flags, *args, **kwargs)
+            if Path(path) == source and not replaced:
+                os.replace(replacement, source)
+                replaced = True
+            return descriptor
+
+        try:
+            with patch('soul.diag_actioncausal.os.open', side_effect=replace_after_open):
+                with self.assertRaisesRegex(ValueError, 'path changed while it was being opened'):
+                    sha256_file(source)
+            self.assertTrue(replaced)
+        finally:
+            source.unlink(missing_ok=True)
+            replacement.unlink(missing_ok=True)
+
     @unittest.skipIf(os.name == 'nt', 'open-file replacement semantics differ on Windows')
     def test_checkpoint_snapshot_rejects_path_replacement_after_open(self):
         class MustNotLoad:

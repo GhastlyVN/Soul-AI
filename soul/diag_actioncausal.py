@@ -259,10 +259,52 @@ def summarize_ablation(result):
 
 
 def sha256_file(path):
-    """Hash a provenance input without reading beyond the configured resource cap."""
+    """Hash a bounded regular provenance file without following links or blocking on special files."""
+    path = Path(path)
+    try:
+        path_before = path.lstat()
+    except OSError as error:
+        raise ValueError(f'provenance input is unavailable: {path}') from error
+    if (
+        _checkpoint_is_link_or_reparse_point(path_before)
+        or not stat.S_ISREG(path_before.st_mode)
+    ):
+        raise ValueError(f'provenance input must be a regular non-symlink file: {path}')
+
+    flags = os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NONBLOCK', 0)
+    if hasattr(os, 'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ValueError(f'provenance input could not be opened safely: {path}: {error}') from error
+
     digest = hashlib.sha256()
-    total = 0
-    with open(path, 'rb') as stream:
+    with os.fdopen(descriptor, 'rb') as stream:
+        before = os.fstat(stream.fileno())
+        if (
+            _checkpoint_is_link_or_reparse_point(before)
+            or not stat.S_ISREG(before.st_mode)
+            or _checkpoint_file_identity(before) != _checkpoint_file_identity(path_before)
+        ):
+            raise ValueError(f'provenance input changed while it was being opened: {path}')
+        try:
+            path_after_open = path.lstat()
+        except OSError as error:
+            raise ValueError(f'provenance input path changed while it was being opened: {path}') from error
+        if (
+            _checkpoint_is_link_or_reparse_point(path_after_open)
+            or not stat.S_ISREG(path_after_open.st_mode)
+            or _checkpoint_file_identity(path_after_open) != _checkpoint_file_identity(before)
+        ):
+            raise ValueError(f'provenance input path changed while it was being opened: {path}')
+        if before.st_size > MAX_PROVENANCE_FILE_BYTES:
+            raise ValueError(
+                f'provenance input exceeds size limit: {path} '
+                f'(limit {MAX_PROVENANCE_FILE_BYTES} bytes)'
+            )
+
+        total = 0
         while True:
             chunk = stream.read(min(1024 * 1024, MAX_PROVENANCE_FILE_BYTES - total + 1))
             if not chunk:
@@ -274,6 +316,20 @@ def sha256_file(path):
                     f'(limit {MAX_PROVENANCE_FILE_BYTES} bytes)'
                 )
             digest.update(chunk)
+
+        after = os.fstat(stream.fileno())
+        try:
+            path_after = path.lstat()
+        except OSError as error:
+            raise ValueError(f'provenance input path changed while it was being hashed: {path}') from error
+        if (
+            total != before.st_size
+            or _checkpoint_file_identity(before) != _checkpoint_file_identity(after)
+            or _checkpoint_file_identity(after) != _checkpoint_file_identity(path_after)
+            or _checkpoint_is_link_or_reparse_point(path_after)
+            or not stat.S_ISREG(path_after.st_mode)
+        ):
+            raise ValueError(f'provenance input changed while it was being hashed: {path}')
     return digest.hexdigest()
 
 
