@@ -20,8 +20,11 @@ test bao "khong phan biet duoc" chu khong ket luan sai.
 """
 
 import argparse
+import hashlib
+import json
 import os
 import sys
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -74,9 +77,63 @@ def _shuffle_action_timesteps(actions, valid, generator=None):
     return shuffled
 
 
-def measure(s, rng, shuffle, n_batches=10, shuffle_seed=0):
-    tot, n = 0.0, 0
-    shuffle_generator = None
+INTERVENTIONS = ('real', 'zero', 'shuffle', 'lag', 'lead', 'negate')
+
+
+def intervene_actions(actions, valid, kind='real', generator=None):
+    """Apply one intervention; only valid timesteps may change.
+
+    Lag/lead use an explicit zero at the sequence boundary instead of
+    borrowing an action from the other side of an episode.
+    """
+    if kind not in INTERVENTIONS:
+        raise ValueError(f'unknown action intervention: {kind!r}')
+    if actions.ndim != 3 or valid.shape != actions.shape[:2]:
+        raise ValueError('actions must be [batch, time, action] and valid [batch, time]')
+    if kind == 'real':
+        return actions.clone()
+
+    mask = valid > 0
+    result = actions.clone()
+    if kind == 'zero':
+        result[mask] = 0
+        return result
+    if kind == 'negate':
+        result[mask] = -result[mask]
+        return result
+
+    for batch_index in range(actions.shape[0]):
+        indices = torch.nonzero(mask[batch_index], as_tuple=False).flatten()
+        if indices.numel() == 0:
+            continue
+        values = actions[batch_index, indices].clone()
+        if kind == 'shuffle':
+            one = actions[batch_index:batch_index + 1]
+            one_valid = valid[batch_index:batch_index + 1]
+            replaced = _shuffle_action_timesteps(one, one_valid, generator=generator)[0, indices]
+        else:
+            replaced = torch.zeros_like(values)
+            if indices.numel() > 1:
+                if kind == 'lag':
+                    replaced[1:] = values[:-1]
+                else:
+                    replaced[:-1] = values[1:]
+        result[batch_index, indices] = replaced
+    return result
+
+
+def measure_kl_series(s, rng, intervention='real', n_batches=10,
+                      intervention_seed=0):
+    """Return per-batch KL values and the number of valid transitions.
+
+    Intervention permutations use a private generator so they never consume
+    the latent-noise stream shared by every paired measurement.
+    """
+    if intervention not in INTERVENTIONS:
+        raise ValueError(f'unknown action intervention: {intervention!r}')
+    values = []
+    valid_transitions = 0
+    generator = None
     for _ in range(n_batches):
         b = s.replay.sample(8, rng)
         if b is None:
@@ -85,24 +142,95 @@ def measure(s, rng, shuffle, n_batches=10, shuffle_seed=0):
         v_, m_, tx = t(b['values']), t(b['masks']), t(b['texts'])
         ac, va = t(b['actions']), t(b['valid'])
         seq = ac.shape[1]
-        # The replay batch adds one lookahead observation for target use,
-        # while actions/valid cover only the input sequence.
         oi = torch.cat([v_, m_, tx], -1)[:, :seq]
-        if shuffle:
-            # Keep action permutations on a private RNG so latent samples remain paired.
-            if shuffle_generator is None:
-                shuffle_generator = torch.Generator(device=ac.device)
-                shuffle_generator.manual_seed(shuffle_seed)
-            ac = _shuffle_action_timesteps(ac, va, generator=shuffle_generator)
+        if intervention == 'shuffle' and generator is None:
+            generator = torch.Generator(device=ac.device)
+            generator.manual_seed(intervention_seed)
+        ac = intervene_actions(ac, va, intervention, generator=generator)
         with torch.no_grad():
             out = s.model.dynamics.observe_sequence(
                 oi, ac, s.model.encoder, va)
             kl = _kl_normal(out['prior_mu'], out['prior_lv'],
                             out['post_mu'], out['post_lv']).sum(-1)
             kl = torch.maximum(kl, torch.tensor(0.0)).mean()
-        tot += float(kl)
-        n += 1
-    return tot / max(n, 1)
+        values.append(float(kl))
+        valid_transitions += int((va > 0).sum().item())
+    return values, valid_transitions
+
+
+def measure_ablation(s, seed, n_batches=10, interventions=INTERVENTIONS):
+    """Measure every intervention from one paired latent-noise stream."""
+    kinds = tuple(interventions)
+    if not kinds or len(set(kinds)) != len(kinds):
+        raise ValueError('interventions must be a non-empty list of unique names')
+    cuda_devices = (
+        list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
+    )
+    with torch.random.fork_rng(devices=cuda_devices):
+        torch.manual_seed(seed)
+        if cuda_devices:
+            torch.cuda.manual_seed_all(seed)
+        cpu_state = torch.get_rng_state()
+        cuda_states = torch.cuda.get_rng_state_all() if cuda_devices else None
+        series = {}
+        valid_transitions = 0
+        for offset, kind in enumerate(kinds):
+            torch.set_rng_state(cpu_state)
+            if cuda_states is not None:
+                torch.cuda.set_rng_state_all(cuda_states)
+            values, count = measure_kl_series(
+                s, np.random.default_rng(seed), kind,
+                n_batches=n_batches, intervention_seed=seed + 1000 + offset,
+            )
+            series[kind] = values
+            valid_transitions = count
+    return {'series': series, 'valid_transitions': valid_transitions}
+
+
+def _stats(values):
+    return {
+        'mean': float(np.mean(values)),
+        'median': float(np.median(values)),
+        'dispersion': float(np.std(values)),
+        'count': len(values),
+    }
+
+
+def summarize_ablation(result):
+    """Per-intervention KL plus paired effects against the real-action run."""
+    series = result['series']
+    real = series.get('real')
+    interventions = {
+        kind: dict(_stats(values), per_episode_kl=list(values))
+        for kind, values in series.items()
+    }
+    paired = {}
+    if real is not None:
+        paired = {
+            kind: _stats([value - baseline for value, baseline in zip(values, real)])
+            for kind, values in series.items() if kind != 'real'
+        }
+    return {
+        'interventions': interventions,
+        'paired_effects_vs_real': paired,
+        'valid_transitions': result['valid_transitions'],
+    }
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def measure(s, rng, shuffle, n_batches=10, shuffle_seed=0):
+    values, _ = measure_kl_series(
+        s, rng, 'shuffle' if shuffle else 'real',
+        n_batches=n_batches, intervention_seed=shuffle_seed,
+    )
+    return sum(values) / max(len(values), 1)
 
 
 def measure_paired_actions(s, seed, n_batches=10):
