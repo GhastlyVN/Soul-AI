@@ -361,6 +361,18 @@ class AblationReportTests(unittest.TestCase):
             self.assertEqual(list(root.glob('.report.json.*.tmp')), [])
 
 
+    def test_report_write_round_trips_sorted_json(self):
+        with tempfile.TemporaryDirectory() as temp:
+            report = Path(temp) / 'nested' / 'report.json'
+            payload = {'z': 1, 'a': {'d': 4, 'b': 2}}
+
+            _write_json_report_atomic(report, payload, [])
+
+            self.assertEqual(
+                report.read_text(encoding='utf-8'),
+                '{\n  "a": {\n    "b": 2,\n    "d": 4\n  },\n  "z": 1\n}\n',
+            )
+
     def test_summary_keeps_per_episode_values_and_paired_effects(self):
         result = {
             'series': {'real': [1.0, 3.0], 'zero': [2.0, 5.0]},
