@@ -275,7 +275,18 @@ def main():
     ap.add_argument('--warmup-episodes', type=int, default=30)
     ap.add_argument('--learn-per-collect', type=int, default=20)
     ap.add_argument('--batches', type=int, default=10)
+    ap.add_argument('--matrix', action='store_true',
+                    help='measure all action interventions with paired RNG')
+    ap.add_argument('--report', help='write a machine-readable JSON report')
+    ap.add_argument('--no-train', action='store_true',
+                    help='refuse to train when the diagnostic checkpoint is absent')
+    ap.add_argument('--train-path', help='optional TRAIN snapshot to hash into the report')
+    ap.add_argument('--pilot-path', help='optional PILOT snapshot to hash into the report')
     args = ap.parse_args()
+    if args.report and not args.matrix:
+        ap.error('--report requires --matrix')
+    if not os.path.exists(CKPT) and args.no_train:
+        raise SystemExit(f'checkpoint is missing and training is disabled: {CKPT}')
     if os.path.exists(CKPT):
         print(f'  Load checkpoint: {CKPT}')
         cfg = Config()
@@ -289,6 +300,52 @@ def main():
         s = build(args.seed, args.steps, args.warmup_episodes,
                   args.learn_per_collect)
         print('  xong.')
+
+    if args.matrix:
+        result = measure_ablation(s, args.seed + 7, n_batches=args.batches)
+        summary = summarize_ablation(result)
+        _banner('Action intervention matrix (exploratory; DRAFT_NOT_LOCKED)')
+        for kind, values in result['series'].items():
+            stats = summary['interventions'][kind]
+            print(f'  {kind:8s}: KL mean={stats["mean"]:.4f} '
+                  f'dispersion={stats["dispersion"]:.4f} batches={stats["count"]}')
+        for kind, effect in summary['paired_effects_vs_real'].items():
+            print(f'  {kind:8s} minus real: {effect["mean"]:+.4f} '
+                  f'(median {effect["median"]:+.4f}, dispersion {effect["dispersion"]:.4f})')
+        print(f'  valid transitions per measurement: {summary["valid_transitions"]}')
+        print('  No threshold or promotion decision is made by this diagnostic.')
+        if args.report:
+            report_path = Path(args.report)
+            if report_path.resolve() == Path(CKPT).resolve():
+                raise SystemExit('report path must not overwrite the checkpoint')
+            payload = {
+                'protocol': 'DRAFT_NOT_LOCKED',
+                'threshold': 'TO_LOCK',
+                'confirm_accessed': False,
+                'interpretation': 'exploratory only; no generalization or promotion claim',
+                'provenance': {
+                    'checkpoint_path': str(CKPT),
+                    'checkpoint_sha256': sha256_file(CKPT),
+                    'train_sha256': sha256_file(args.train_path) if args.train_path else None,
+                    'pilot_sha256': sha256_file(args.pilot_path) if args.pilot_path else None,
+                    'code_commit': os.environ.get('GITHUB_SHA'),
+                    'python': sys.version.split()[0],
+                    'torch': torch.__version__,
+                    'numpy': np.__version__,
+                    'device': str(getattr(s, 'device', 'unknown')),
+                    'seed': args.seed,
+                    'n_batches': args.batches,
+                    'interventions': list(INTERVENTIONS),
+                },
+                'summary': summary,
+            }
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            with report_path.open('w', encoding='utf-8') as stream:
+                json.dump(payload, stream, indent=2, sort_keys=True)
+                stream.write('\n')
+            print(f'  report: {report_path}')
+        return
+
     _banner('KL prior||posterior cua hanh dung va hanh xao tron')
     real, shuf = measure_paired_actions(s, args.seed + 7, n_batches=args.batches)
     print(f'  hanh dong THAT     : KL = {real:.4f} nats')
