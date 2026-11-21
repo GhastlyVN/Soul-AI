@@ -131,6 +131,41 @@ def test_rejects_oversized_archive_before_hashing(tmp_path: Path):
                 inspect_package(archive)
 
 
+def test_rejects_oversized_central_directory_before_zipfile_parsing(tmp_path: Path):
+    archive = tmp_path / "large-central-directory.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", '{"schema_version":1}')
+
+    with (
+        patch.object(inspector, "MAX_CENTRAL_DIRECTORY_BYTES", 1),
+        patch.object(
+            inspector.zipfile,
+            "ZipFile",
+            side_effect=AssertionError("central directory must be bounded before ZipFile"),
+        ),
+    ):
+        with pytest.raises(ValueError, match="ZIP central directory exceeds the size limit"):
+            inspect_package(archive)
+
+
+def test_rejects_too_many_entries_before_zipfile_parsing(tmp_path: Path):
+    archive = tmp_path / "entry-count-preflight.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("one.bin", b"1")
+        zf.writestr("two.bin", b"2")
+
+    with (
+        patch.object(inspector, "MAX_ARCHIVE_ENTRIES", 1),
+        patch.object(
+            inspector.zipfile,
+            "ZipFile",
+            side_effect=AssertionError("entry count must be bounded before ZipFile"),
+        ),
+    ):
+        with pytest.raises(ValueError, match="too many ZIP entries"):
+            inspect_package(archive)
+
+
 def test_rejects_duplicate_json_keys(tmp_path: Path):
     archive = tmp_path / "duplicate-json.zip"
     with zipfile.ZipFile(archive, "w") as zf:
