@@ -9,11 +9,70 @@ import torch
 from soul.diag_actioncausal import (
     _shuffle_action_timesteps,
     _write_json_report_atomic,
+    checkpoint_exists_or_training,
+    load_checkpoint_snapshot,
+    sha256_file,
     intervene_actions,
     measure_ablation,
     measure_paired_actions,
     summarize_ablation,
 )
+
+
+class CheckpointBoundaryTests(unittest.TestCase):
+    def test_missing_checkpoint_requires_explicit_training_opt_in(self):
+        missing = Path(tempfile.gettempdir()) / f'soul-action-missing-{os.getpid()}.ckpt'
+        missing.unlink(missing_ok=True)
+        with self.assertRaisesRegex(FileNotFoundError, '--train-if-missing'):
+            checkpoint_exists_or_training(missing, allow_training=False)
+        self.assertFalse(checkpoint_exists_or_training(missing, allow_training=True))
+
+    def test_checkpoint_snapshot_hashes_the_exact_bytes_loaded(self):
+        class CapturingSoul:
+            def load(self, path):
+                self.loaded_path = Path(path)
+                self.loaded_bytes = self.loaded_path.read_bytes()
+
+        source = Path(tempfile.gettempdir()) / f'soul-action-snapshot-{os.getpid()}.ckpt'
+        payload = b'checkpoint bytes are hashed and loaded from the same snapshot'
+        source.write_bytes(payload)
+        soul = CapturingSoul()
+        try:
+            expected = sha256_file(source)
+            actual = load_checkpoint_snapshot(soul, source, expected_sha256=expected)
+            self.assertEqual(actual, expected)
+            self.assertEqual(soul.loaded_bytes, payload)
+            self.assertFalse(soul.loaded_path.exists())
+        finally:
+            source.unlink(missing_ok=True)
+
+    def test_checkpoint_snapshot_rejects_digest_mismatch_before_load(self):
+        class MustNotLoad:
+            def load(self, _path):
+                raise AssertionError('checkpoint must not deserialize after a hash mismatch')
+
+        source = Path(tempfile.gettempdir()) / f'soul-action-mismatch-{os.getpid()}.ckpt'
+        source.write_bytes(b'known checkpoint bytes')
+        try:
+            with self.assertRaisesRegex(ValueError, 'does not match the expected digest'):
+                load_checkpoint_snapshot(MustNotLoad(), source, expected_sha256='0' * 64)
+        finally:
+            source.unlink(missing_ok=True)
+
+    def test_checkpoint_symlinks_are_rejected(self):
+        source = Path(tempfile.gettempdir()) / f'soul-action-symlink-target-{os.getpid()}.ckpt'
+        alias = Path(tempfile.gettempdir()) / f'soul-action-symlink-{os.getpid()}.ckpt'
+        source.write_bytes(b'checkpoint')
+        try:
+            try:
+                alias.symlink_to(source)
+            except (OSError, NotImplementedError):
+                self.skipTest('symlink creation is unavailable on this runner')
+            with self.assertRaisesRegex(ValueError, 'must not be a symlink'):
+                checkpoint_exists_or_training(alias, allow_training=False)
+        finally:
+            alias.unlink(missing_ok=True)
+            source.unlink(missing_ok=True)
 
 
 class ActionShuffleTests(unittest.TestCase):
