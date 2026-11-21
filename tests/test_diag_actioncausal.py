@@ -1,10 +1,14 @@
+import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import torch
 
 from soul.diag_actioncausal import (
     _shuffle_action_timesteps,
+    _write_json_report_atomic,
     intervene_actions,
     measure_ablation,
     measure_paired_actions,
@@ -194,6 +198,63 @@ class AblationReportTests(unittest.TestCase):
             measure_ablation(None, seed=1, interventions=('real', 'real'))
         with self.assertRaisesRegex(ValueError, 'unknown action intervention'):
             measure_ablation(None, seed=1, interventions=('real', 'bogus'))
+
+    def test_report_refuses_checkpoint_and_dataset_aliases(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            protected = []
+            for name in ('checkpoint.ckpt', 'train.npz', 'pilot.npz'):
+                path = root / name
+                path.write_bytes(name.encode('utf-8'))
+                protected.append(path)
+
+            for source in protected:
+                before = source.read_bytes()
+                with self.subTest(source=source.name):
+                    with self.assertRaisesRegex(
+                        ValueError, 'must not overwrite protected input'
+                    ):
+                        _write_json_report_atomic(source, {'unsafe': True}, protected)
+                    self.assertEqual(source.read_bytes(), before)
+
+            hardlink = root / 'train-hardlink.npz'
+            try:
+                os.link(protected[1], hardlink)
+            except OSError:
+                pass
+            else:
+                with self.assertRaisesRegex(
+                    ValueError, 'must not overwrite protected input'
+                ):
+                    _write_json_report_atomic(hardlink, {'unsafe': True}, protected)
+                self.assertEqual(protected[1].read_bytes(), b'train.npz')
+
+            symlink = root / 'pilot-symlink.npz'
+            try:
+                symlink.symlink_to(protected[2])
+            except (OSError, NotImplementedError):
+                pass
+            else:
+                with self.assertRaisesRegex(ValueError, 'must not be a symlink'):
+                    _write_json_report_atomic(symlink, {'unsafe': True}, protected)
+                self.assertEqual(protected[2].read_bytes(), b'pilot.npz')
+
+    def test_report_write_failure_preserves_existing_file_and_cleans_temp(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            report = root / 'report.json'
+            report.write_text('previous report\n', encoding='utf-8')
+
+            with patch(
+                'soul.diag_actioncausal.json.dump',
+                side_effect=OSError('synthetic serialization failure'),
+            ):
+                with self.assertRaisesRegex(OSError, 'synthetic serialization failure'):
+                    _write_json_report_atomic(report, {'complete': True}, [])
+
+            self.assertEqual(report.read_text(encoding='utf-8'), 'previous report\n')
+            self.assertEqual(list(root.glob('.report.json.*.tmp')), [])
+
 
     def test_summary_keeps_per_episode_values_and_paired_effects(self):
         result = {

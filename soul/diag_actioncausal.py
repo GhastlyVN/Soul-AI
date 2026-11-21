@@ -24,6 +24,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -228,6 +229,74 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
+def _reject_report_output_aliases(report_path, protected_paths):
+    """Refuse report targets that alias the checkpoint or hashed source datasets."""
+    report_path = Path(report_path)
+    if report_path.is_symlink():
+        raise ValueError('report path must not be a symlink')
+    if report_path.exists() and not report_path.is_file():
+        raise ValueError('report path must be a regular file')
+
+    try:
+        resolved_report = report_path.resolve(strict=False)
+    except (OSError, RuntimeError) as error:
+        raise ValueError(f'cannot resolve report path: {report_path}') from error
+
+    for protected in protected_paths:
+        if protected is None:
+            continue
+        source = Path(protected)
+        try:
+            if resolved_report == source.resolve(strict=False):
+                raise ValueError(
+                    f'report path must not overwrite protected input: {source}'
+                )
+            if report_path.exists() and source.exists() and os.path.samefile(report_path, source):
+                raise ValueError(
+                    f'report path must not overwrite protected input: {source}'
+                )
+        except (OSError, RuntimeError) as error:
+            raise ValueError(
+                f'cannot verify report path against protected input: {source}'
+            ) from error
+
+
+def _write_json_report_atomic(report_path, payload, protected_paths):
+    """Write a report beside its destination and replace it only after a complete flush."""
+    report_path = Path(report_path)
+    _reject_report_output_aliases(report_path, protected_paths)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    _reject_report_output_aliases(report_path, protected_paths)
+
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode='w',
+            encoding='utf-8',
+            dir=report_path.parent,
+            prefix=f'.{report_path.name}.',
+            suffix='.tmp',
+            delete=False,
+        ) as stream:
+            temporary_path = Path(stream.name)
+            json.dump(payload, stream, indent=2, sort_keys=True)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+
+        # Re-check immediately before replacement. os.replace never follows an
+        # existing destination symlink, but refusing it keeps the path contract clear.
+        _reject_report_output_aliases(report_path, protected_paths)
+        os.replace(temporary_path, report_path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def measure(s, rng, shuffle, n_batches=10, shuffle_seed=0):
     values, _ = measure_kl_series(
         s, rng, 'shuffle' if shuffle else 'real',
@@ -288,6 +357,12 @@ def main():
     args = ap.parse_args()
     if args.report and not args.matrix:
         ap.error('--report requires --matrix')
+    protected_report_inputs = [CKPT, args.train_path, args.pilot_path]
+    if args.report:
+        try:
+            _reject_report_output_aliases(Path(args.report), protected_report_inputs)
+        except ValueError as error:
+            ap.error(str(error))
     if not os.path.exists(CKPT) and args.no_train:
         raise SystemExit(f'checkpoint is missing and training is disabled: {CKPT}')
     if os.path.exists(CKPT):
@@ -319,8 +394,6 @@ def main():
         print('  No threshold or promotion decision is made by this diagnostic.')
         if args.report:
             report_path = Path(args.report)
-            if report_path.resolve() == Path(CKPT).resolve():
-                raise SystemExit('report path must not overwrite the checkpoint')
             payload = {
                 'protocol': 'DRAFT_NOT_LOCKED',
                 'threshold': 'TO_LOCK',
@@ -342,10 +415,9 @@ def main():
                 },
                 'summary': summary,
             }
-            report_path.parent.mkdir(parents=True, exist_ok=True)
-            with report_path.open('w', encoding='utf-8') as stream:
-                json.dump(payload, stream, indent=2, sort_keys=True)
-                stream.write('\n')
+            _write_json_report_atomic(
+                report_path, payload, protected_report_inputs
+            )
             print(f'  report: {report_path}')
         return
 
