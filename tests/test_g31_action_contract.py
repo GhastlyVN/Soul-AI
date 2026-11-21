@@ -148,13 +148,13 @@ class G31ActionContractTests(unittest.TestCase):
     def test_rows_to_episodes_rejects_observation_discontinuity(self):
         rows = [
             {
-                'episode_id': 'train_ep0', 'timestep': 0,
+                'episode_id': 'train_ep0', 'episode_seed': 1001, 'timestep': 0,
                 'raw_observation_before': [1.0, 0.0, 0.0],
                 'raw_observation_after': [0.9, 0.1, 1.0],
                 'applied_action': [0.0], 'reward': 0.0, 'terminal': False,
             },
             {
-                'episode_id': 'train_ep0', 'timestep': 1,
+                'episode_id': 'train_ep0', 'episode_seed': 1001, 'timestep': 1,
                 'raw_observation_before': [0.8, 0.2, 2.0],
                 'raw_observation_after': [0.7, 0.3, 3.0],
                 'applied_action': [0.0], 'reward': 0.0, 'terminal': False,
@@ -165,7 +165,7 @@ class G31ActionContractTests(unittest.TestCase):
 
     def test_rows_to_episodes_rejects_timestep_gap(self):
         rows = [{
-            'episode_id': 'train_ep0', 'timestep': 1,
+            'episode_id': 'train_ep0', 'episode_seed': 1001, 'timestep': 1,
             'raw_observation_after': [1.0, 0.0, 0.0],
             'applied_action': [0.0], 'reward': 0.0, 'terminal': False,
         }]

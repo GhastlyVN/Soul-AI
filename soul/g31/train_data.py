@@ -134,6 +134,7 @@ def load_train_jsonl_snapshot(path: str):
     source = Path(path)
     raw, digest = read_file_snapshot(source, MAX_TRAIN_JSONL_BYTES)
     rows = []
+    episode_for_seed = {}
     for line_no, line in enumerate(raw.decode('utf-8').splitlines(), 1):
         row = parse_jsonl_object(line, source, line_no)
         if row.get('split') != 'train':
@@ -148,6 +149,12 @@ def load_train_jsonl_snapshot(path: str):
         episode_id = row.get('episode_id')
         if not isinstance(episode_id, str) or not episode_id.strip():
             raise ValueError(f'invalid episode_id at {source}:{line_no}')
+        previous_episode = episode_for_seed.setdefault(episode_seed, episode_id)
+        if previous_episode != episode_id:
+            raise ValueError(
+                f'TRAIN seed {episode_seed} is assigned to multiple episodes: '
+                f'{previous_episode!r} and {episode_id!r}'
+            )
         timestep = row.get('timestep')
         if isinstance(timestep, bool) or not isinstance(timestep, int) or timestep < 0:
             raise ValueError(f'invalid timestep at {source}:{line_no}')
@@ -191,14 +198,35 @@ def load_train_jsonl(path: str) -> List[Dict]:
 def rows_to_episodes(rows: List[Dict], encoder: ObsEncoder,
                      goal_dim: int) -> List[Episode]:
     """Convert validated TRAIN rows without joining episode boundaries."""
-    grouped = {}
+    grouped: dict[str, list[Dict]] = {}
+    episode_seeds: dict[str, int] = {}
+    seed_episodes: dict[int, str] = {}
     for row in rows:
-        grouped.setdefault(row['episode_id'], []).append(row)
+        episode_id = row['episode_id']
+        seed = row['episode_seed']
+        previous_episode = seed_episodes.setdefault(seed, episode_id)
+        if previous_episode != episode_id:
+            raise ValueError(
+                f'TRAIN seed {seed} is assigned to multiple episodes: '
+                f'{previous_episode!r} and {episode_id!r}'
+            )
+        previous_seed = episode_seeds.setdefault(episode_id, seed)
+        if previous_seed != seed:
+            raise ValueError(
+                f'episode {episode_id}: episode_seed changes within episode'
+            )
+        grouped.setdefault(episode_id, []).append(row)
+
     episodes = []
-    for episode_rows in grouped.values():
+    for episode_id, episode_rows in grouped.items():
         ordered = sorted(episode_rows, key=lambda row: row['timestep'])
-        if [row['timestep'] for row in ordered] != list(range(len(ordered))):
+        timesteps = [row['timestep'] for row in ordered]
+        if timesteps != list(range(len(ordered))):
             raise ValueError('episode timesteps must be contiguous from zero')
+        if any(row['terminal'] for row in ordered[:-1]):
+            raise ValueError(
+                f'episode {episode_id}: terminal transition must be the final timestep'
+            )
         for previous, current in zip(ordered, ordered[1:]):
             previous_after = np.asarray(previous['raw_observation_after'], dtype=np.float32)
             current_before = np.asarray(current['raw_observation_before'], dtype=np.float32)

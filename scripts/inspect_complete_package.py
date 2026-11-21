@@ -17,6 +17,7 @@ import unicodedata
 import zipfile
 
 MAX_ARCHIVE_ENTRIES = 100_000
+MAX_CENTRAL_DIRECTORY_BYTES = 64 * 1024**2
 # The uncompressed total is capped at 8 GiB; allow reasonable ZIP metadata overhead,
 # but do not hash or parse an arbitrarily large input archive.
 MAX_ARCHIVE_BYTES = 9 * 1024**3
@@ -97,8 +98,8 @@ def _validate_name(info: zipfile.ZipInfo) -> tuple[str, bool]:
     return "/".join(path.parts), is_directory
 
 
-def _hash_archive_bounded(stream):
-    """Hash one open archive without reading more than the configured limit plus one byte."""
+def _hash_archive_bounded(stream, snapshot=None):
+    """Hash one bounded input stream and optionally copy the exact bytes to a snapshot."""
     archive_hash = hashlib.sha256()
     total_bytes = 0
     while True:
@@ -116,25 +117,140 @@ def _hash_archive_bounded(stream):
                 f"{total_bytes} (limit {MAX_ARCHIVE_BYTES})"
             )
         archive_hash.update(chunk)
+        if snapshot is not None:
+            snapshot.write(chunk)
     return archive_hash
 
 
-def inspect_package(archive_path: Path) -> dict[str, object]:
-    if not archive_path.is_file():
-        raise ValueError(f"not a readable ZIP archive: {archive_path}")
+def _preflight_zip_stream(stream, archive_path: Path) -> tuple[int, int]:
+    """Bound ZIP end-record metadata before ZipFile allocates central-directory entries."""
+    try:
+        position = stream.tell()
+    except (AttributeError, OSError) as error:
+        raise ValueError(f"ZIP input must be seekable: {archive_path}") from error
 
-    with archive_path.open("rb") as raw_archive:
+    try:
+        stream.seek(0, os.SEEK_END)
+        file_size = stream.tell()
+        endrec = zipfile._EndRecData(stream)
+        if endrec is None or len(endrec) < 10:
+            raise ValueError(f"ZIP end-of-central-directory record is missing: {archive_path}")
+
+        (
+            disk_number,
+            central_disk,
+            entries_on_disk,
+            entries_total,
+            central_size,
+            central_offset,
+        ) = endrec[1:7]
+        end_record_offset = endrec[9]
+        if disk_number != 0 or central_disk != 0 or entries_on_disk != entries_total:
+            raise ValueError(f"multi-disk ZIP archives are not supported: {archive_path}")
+        if (
+            entries_total == 0xFFFF
+            or central_size == 0xFFFFFFFF
+            or central_offset == 0xFFFFFFFF
+        ):
+            raise ValueError(f"ZIP64 end-of-central-directory record is incomplete: {archive_path}")
+        if entries_total > MAX_ARCHIVE_ENTRIES:
+            raise ValueError(
+                f"too many ZIP entries in {archive_path}: {entries_total} "
+                f"(limit {MAX_ARCHIVE_ENTRIES})"
+            )
+        if central_size > MAX_CENTRAL_DIRECTORY_BYTES:
+            raise ValueError(
+                f"ZIP central directory exceeds the size limit: {central_size} bytes "
+                f"(limit {MAX_CENTRAL_DIRECTORY_BYTES})"
+            )
+        if (
+            central_size < 0
+            or central_offset < 0
+            or central_offset + central_size > file_size
+            or central_offset + central_size > end_record_offset
+        ):
+            raise ValueError(f"ZIP central-directory bounds are invalid: {archive_path}")
+        return entries_total, central_size
+    except ValueError:
+        raise
+    except (OSError, zipfile.BadZipFile, IndexError, TypeError) as error:
+        raise ValueError(f"invalid ZIP end-of-central-directory record: {archive_path}") from error
+    finally:
+        stream.seek(position)
+
+
+def _file_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    """Use portable file identity fields; Windows ctime is creation time, not change time."""
+    identity = (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+    )
+    if os.name != "nt":
+        return (*identity, metadata.st_ctime_ns)
+    return identity
+
+
+def _is_link_or_reparse_point(metadata: os.stat_result) -> bool:
+    return stat.S_ISLNK(metadata.st_mode) or bool(
+        getattr(metadata, "st_file_attributes", 0) & 0x400
+    )
+
+
+def inspect_package(archive_path: Path) -> dict[str, object]:
+    archive_path = Path(archive_path)
+    try:
+        path_before = archive_path.lstat()
+    except OSError as error:
+        raise ValueError(f"not a readable ZIP archive: {archive_path}") from error
+    if _is_link_or_reparse_point(path_before) or not stat.S_ISREG(path_before.st_mode):
+        raise ValueError(f"not a regular non-symlink ZIP archive: {archive_path}")
+
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(archive_path, flags)
+    except OSError as error:
+        raise ValueError(f"could not open ZIP archive safely: {archive_path}: {error}") from error
+
+    # Hash and inspect one private disk-backed snapshot. This prevents a path swap
+    # or concurrent source mutation from making the report hash describe different
+    # bytes than the ZIP metadata/member inventory. The 9 GiB input cap bounds disk use.
+    with os.fdopen(descriptor, "rb") as raw_archive, tempfile.TemporaryFile(mode="w+b") as snapshot:
         before = os.fstat(raw_archive.fileno())
-        if not stat.S_ISREG(before.st_mode):
-            raise ValueError(f"not a regular ZIP archive: {archive_path}")
+        if (
+            _is_link_or_reparse_point(before)
+            or not stat.S_ISREG(before.st_mode)
+            or _file_identity(before) != _file_identity(path_before)
+        ):
+            raise ValueError(f"ZIP archive changed while it was being opened: {archive_path}")
+        try:
+            path_after_open = archive_path.lstat()
+        except OSError as error:
+            raise ValueError("ZIP archive path changed while it was being opened") from error
+        if (
+            _is_link_or_reparse_point(path_after_open)
+            or not stat.S_ISREG(path_after_open.st_mode)
+            or _file_identity(path_after_open) != _file_identity(before)
+        ):
+            raise ValueError("ZIP archive changed while it was being opened")
         if before.st_size > MAX_ARCHIVE_BYTES:
             raise ValueError(
                 f"ZIP archive exceeds inspection size limit: {before.st_size} "
                 f"(limit {MAX_ARCHIVE_BYTES})"
             )
-        if not zipfile.is_zipfile(raw_archive):
+
+        archive_hash = _hash_archive_bounded(raw_archive, snapshot)
+        if snapshot.tell() != before.st_size:
+            raise ValueError(f"ZIP archive size changed while creating inspection snapshot: {archive_path}")
+        snapshot.flush()
+        snapshot.seek(0)
+        _preflight_zip_stream(snapshot, archive_path)
+        if not zipfile.is_zipfile(snapshot):
             raise ValueError(f"not a readable ZIP archive: {archive_path}")
-        raw_archive.seek(0)
+        snapshot.seek(0)
 
         inventory: list[dict[str, object]] = []
         seen: set[str] = set()
@@ -144,10 +260,8 @@ def inspect_package(archive_path: Path) -> dict[str, object]:
         directories = 0
         total_uncompressed = 0
         actual_total_uncompressed = 0
-        archive_hash = _hash_archive_bounded(raw_archive)
-        raw_archive.seek(0)
 
-        with zipfile.ZipFile(raw_archive) as zf:
+        with zipfile.ZipFile(snapshot) as zf:
             entries = zf.infolist()
             if not entries:
                 raise ValueError("empty ZIP archive")
@@ -250,8 +364,16 @@ def inspect_package(archive_path: Path) -> dict[str, object]:
                 })
 
         after = os.fstat(raw_archive.fileno())
-        stable_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
-        if any(getattr(before, field) != getattr(after, field) for field in stable_fields):
+        try:
+            path_after = archive_path.lstat()
+        except OSError as error:
+            raise ValueError("ZIP archive path changed during inspection") from error
+        if (
+            _is_link_or_reparse_point(path_after)
+            or not stat.S_ISREG(path_after.st_mode)
+            or _file_identity(before) != _file_identity(after)
+            or _file_identity(after) != _file_identity(path_after)
+        ):
             raise ValueError("ZIP archive changed during inspection")
 
     files = [item for item in inventory if item["kind"] == "file"]
