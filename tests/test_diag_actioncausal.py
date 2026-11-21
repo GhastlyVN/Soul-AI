@@ -7,6 +7,7 @@ from unittest.mock import patch
 import torch
 
 from soul.diag_actioncausal import (
+    _masked_kl_mean,
     _shuffle_action_timesteps,
     _write_json_report_atomic,
     checkpoint_exists_or_training,
@@ -344,6 +345,27 @@ class ActionInterventionTests(unittest.TestCase):
         actions, valid = self._sequence()
         with self.assertRaisesRegex(ValueError, 'unknown action intervention'):
             intervene_actions(actions, valid, 'reverse-time')
+
+
+class MaskedKLMetricsTests(unittest.TestCase):
+    def test_kl_mean_excludes_invalid_terminal_rows(self):
+        kl = torch.tensor([[2.0, 1000.0], [4.0, 2000.0]])
+        valid = torch.tensor([[1.0, 0.0], [1.0, 0.0]])
+
+        self.assertEqual(_masked_kl_mean(kl, valid).item(), 3.0)
+
+    def test_kl_mean_rejects_empty_or_non_binary_transition_masks(self):
+        with self.assertRaisesRegex(ValueError, 'no valid transitions'):
+            _masked_kl_mean(torch.zeros(1, 2), torch.zeros(1, 2))
+        with self.assertRaisesRegex(ValueError, 'zeros and ones'):
+            _masked_kl_mean(torch.ones(1, 2), torch.tensor([[1.0, 0.5]]))
+
+    def test_kl_mean_rejects_nonfinite_values_on_valid_transitions(self):
+        with self.assertRaisesRegex(ValueError, 'KL values must be finite'):
+            _masked_kl_mean(
+                torch.tensor([[float('nan'), 1000.0]]),
+                torch.tensor([[1.0, 0.0]]),
+            )
 
 
 class AblationReportTests(unittest.TestCase):

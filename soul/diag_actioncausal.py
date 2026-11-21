@@ -126,12 +126,27 @@ def intervene_actions(actions, valid, kind='real', generator=None):
     return result
 
 
+def _masked_kl_mean(kl, valid):
+    """Average KL over real transitions, excluding terminal/padded boundary rows."""
+    if kl.ndim != 2 or valid.shape != kl.shape:
+        raise ValueError('KL and valid-transition mask must have matching [batch, time] shapes')
+    if not torch.isfinite(valid).all() or not torch.logical_or(valid == 0, valid == 1).all():
+        raise ValueError('valid-transition mask must contain only finite zeros and ones')
+    selected = kl.masked_select(valid > 0)
+    if selected.numel() == 0:
+        raise ValueError('KL batch contains no valid transitions')
+    if not torch.isfinite(selected).all():
+        raise ValueError('valid-transition KL values must be finite')
+    return selected.clamp_min(0.0).mean()
+
+
 def measure_kl_series(s, rng, intervention='real', n_batches=10,
                       intervention_seed=0):
-    """Return per-batch KL values and the number of valid transitions.
+    """Return per-batch valid-transition KL values and the transition count.
 
-    Intervention permutations use a private generator so they never consume
-    the latent-noise stream shared by every paired measurement.
+    Terminal/padded boundary rows are excluded from the mean. Intervention
+    permutations use a private generator so they never consume the latent-noise
+    stream shared by every paired measurement.
     """
     if intervention not in INTERVENTIONS:
         raise ValueError(f'unknown action intervention: {intervention!r}')
@@ -156,7 +171,7 @@ def measure_kl_series(s, rng, intervention='real', n_batches=10,
                 oi, ac, s.model.encoder, va)
             kl = _kl_normal(out['prior_mu'], out['prior_lv'],
                             out['post_mu'], out['post_lv']).sum(-1)
-            kl = torch.maximum(kl, torch.tensor(0.0)).mean()
+            kl = _masked_kl_mean(kl, va)
         values.append(float(kl))
         valid_transitions += int((va > 0).sum().item())
     return values, valid_transitions
