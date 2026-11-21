@@ -199,6 +199,52 @@ class AblationReportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'unknown action intervention'):
             measure_ablation(None, seed=1, interventions=('real', 'bogus'))
 
+    def test_ablation_requires_positive_integer_batch_count(self):
+        for n_batches in (0, -1, True, 1.5):
+            with self.subTest(n_batches=n_batches):
+                with self.assertRaisesRegex(ValueError, 'positive integer'):
+                    measure_ablation(None, seed=1, n_batches=n_batches)
+
+    def test_ablation_rejects_missing_batches_and_mismatched_transition_counts(self):
+        with patch(
+            'soul.diag_actioncausal.measure_kl_series',
+            return_value=([1.0], 8),
+        ):
+            with self.assertRaisesRegex(ValueError, 'expected 2'):
+                measure_ablation(None, seed=1, n_batches=2, interventions=('real',))
+
+        def mismatched_count(_s, _rng, kind, n_batches=10, intervention_seed=0):
+            return [1.0] * n_batches, 8 if kind == 'real' else 7
+
+        with patch(
+            'soul.diag_actioncausal.measure_kl_series',
+            side_effect=mismatched_count,
+        ):
+            with self.assertRaisesRegex(ValueError, 'valid-transition count differs'):
+                measure_ablation(
+                    None, seed=1, n_batches=2, interventions=('real', 'zero')
+                )
+
+    def test_summary_rejects_mismatched_paired_series_lengths(self):
+        with self.assertRaisesRegex(ValueError, 'same number of paired batches'):
+            summarize_ablation({
+                'series': {'real': [1.0, 2.0], 'zero': [3.0]},
+                'valid_transitions': 8,
+            })
+
+    def test_summary_rejects_empty_and_nonfinite_series(self):
+        for series in (
+            {'real': []},
+            {'real': [1.0], 'zero': [float('nan')]},
+            {'real': [1.0], 'zero': [True]},
+        ):
+            with self.subTest(series=series):
+                with self.assertRaisesRegex(ValueError, 'at least one batch|finite numeric'):
+                    summarize_ablation({
+                        'series': series,
+                        'valid_transitions': 8,
+                    })
+
     def test_report_refuses_checkpoint_and_dataset_aliases(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
