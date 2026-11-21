@@ -4,6 +4,7 @@ import json
 import os
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -293,6 +294,30 @@ def test_rejects_fifo_archive_input_before_opening(tmp_path: Path):
     ):
         with pytest.raises(ValueError, match="regular non-symlink ZIP archive"):
             inspect_package(fifo)
+
+
+
+def test_rejects_windows_reparse_point_archive_input_before_open(tmp_path: Path, monkeypatch):
+    archive = tmp_path / "reparse.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", '{"schema_version":1}')
+
+    original_lstat = Path.lstat
+
+    def report_reparse_point(path, *args, **kwargs):
+        metadata = original_lstat(path, *args, **kwargs)
+        if Path(path) == archive:
+            return SimpleNamespace(st_mode=metadata.st_mode, st_file_attributes=0x400)
+        return metadata
+
+    monkeypatch.setattr(Path, "lstat", report_reparse_point)
+    with patch.object(
+        inspector.os,
+        "open",
+        side_effect=AssertionError("reparse points must be rejected before opening"),
+    ):
+        with pytest.raises(ValueError, match="regular non-symlink ZIP archive"):
+            inspect_package(archive)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="open-file replacement semantics differ on Windows")

@@ -192,13 +192,19 @@ def _file_identity(metadata: os.stat_result) -> tuple[int, ...]:
     return identity
 
 
+def _is_link_or_reparse_point(metadata: os.stat_result) -> bool:
+    return stat.S_ISLNK(metadata.st_mode) or bool(
+        getattr(metadata, "st_file_attributes", 0) & 0x400
+    )
+
+
 def inspect_package(archive_path: Path) -> dict[str, object]:
     archive_path = Path(archive_path)
     try:
         path_before = archive_path.lstat()
     except OSError as error:
         raise ValueError(f"not a readable ZIP archive: {archive_path}") from error
-    if not stat.S_ISREG(path_before.st_mode):
+    if _is_link_or_reparse_point(path_before) or not stat.S_ISREG(path_before.st_mode):
         raise ValueError(f"not a regular non-symlink ZIP archive: {archive_path}")
 
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
@@ -215,10 +221,21 @@ def inspect_package(archive_path: Path) -> dict[str, object]:
     with os.fdopen(descriptor, "rb") as raw_archive, tempfile.TemporaryFile(mode="w+b") as snapshot:
         before = os.fstat(raw_archive.fileno())
         if (
-            not stat.S_ISREG(before.st_mode)
+            _is_link_or_reparse_point(before)
+            or not stat.S_ISREG(before.st_mode)
             or _file_identity(before) != _file_identity(path_before)
         ):
             raise ValueError(f"ZIP archive changed while it was being opened: {archive_path}")
+        try:
+            path_after_open = archive_path.lstat()
+        except OSError as error:
+            raise ValueError("ZIP archive path changed while it was being opened") from error
+        if (
+            _is_link_or_reparse_point(path_after_open)
+            or not stat.S_ISREG(path_after_open.st_mode)
+            or _file_identity(path_after_open) != _file_identity(before)
+        ):
+            raise ValueError("ZIP archive changed while it was being opened")
         if before.st_size > MAX_ARCHIVE_BYTES:
             raise ValueError(
                 f"ZIP archive exceeds inspection size limit: {before.st_size} "
@@ -352,7 +369,8 @@ def inspect_package(archive_path: Path) -> dict[str, object]:
         except OSError as error:
             raise ValueError("ZIP archive path changed during inspection") from error
         if (
-            not stat.S_ISREG(path_after.st_mode)
+            _is_link_or_reparse_point(path_after)
+            or not stat.S_ISREG(path_after.st_mode)
             or _file_identity(before) != _file_identity(after)
             or _file_identity(after) != _file_identity(path_after)
         ):
