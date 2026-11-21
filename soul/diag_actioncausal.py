@@ -23,6 +23,7 @@ import argparse
 import hashlib
 import json
 import os
+import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -36,6 +37,8 @@ from .trainer import _kl_normal
 
 CKPT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                     '_causal.ckpt')
+MAX_CHECKPOINT_BYTES = 256 * 1024 * 1024
+MAX_PROVENANCE_FILE_BYTES = 256 * 1024 * 1024
 
 
 def _banner(s):
@@ -256,11 +259,35 @@ def summarize_ablation(result):
 
 
 def sha256_file(path):
+    """Hash a provenance input without reading beyond the configured resource cap."""
     digest = hashlib.sha256()
+    total = 0
     with open(path, 'rb') as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+        while True:
+            chunk = stream.read(min(1024 * 1024, MAX_PROVENANCE_FILE_BYTES - total + 1))
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_PROVENANCE_FILE_BYTES:
+                raise ValueError(
+                    f'provenance input exceeds size limit: {path} '
+                    f'(limit {MAX_PROVENANCE_FILE_BYTES} bytes)'
+                )
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _checkpoint_file_identity(metadata):
+    identity = (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
+    if os.name != 'nt':
+        return (*identity, metadata.st_ctime_ns)
+    return identity
+
+
+def _checkpoint_is_link_or_reparse_point(metadata):
+    return stat.S_ISLNK(metadata.st_mode) or bool(
+        getattr(metadata, 'st_file_attributes', 0) & 0x400
+    )
 
 
 def checkpoint_exists_or_training(path, allow_training=False):
@@ -279,35 +306,96 @@ def checkpoint_exists_or_training(path, allow_training=False):
 
 
 def load_checkpoint_snapshot(soul, checkpoint_path, expected_sha256=None):
-    """Hash and load the same disk-backed snapshot, never re-open the source after hashing."""
+    """Hash and load one bounded, no-follow disk snapshot of the checkpoint."""
     checkpoint_path = Path(checkpoint_path)
-    if checkpoint_path.is_symlink() or not checkpoint_path.is_file():
-        raise ValueError(f'diagnostic checkpoint must be a regular non-symlink file: {checkpoint_path}')
+    expected = None
+    if expected_sha256 is not None:
+        if not isinstance(expected_sha256, str):
+            raise ValueError('expected checkpoint SHA-256 must be a string')
+        expected = expected_sha256.strip().lower()
+        if len(expected) != 64 or any(char not in '0123456789abcdef' for char in expected):
+            raise ValueError('expected checkpoint SHA-256 must be 64 lowercase hexadecimal characters')
+
+    try:
+        path_before = checkpoint_path.lstat()
+    except OSError as error:
+        raise ValueError(f'diagnostic checkpoint is unavailable: {checkpoint_path}') from error
+    if (
+        _checkpoint_is_link_or_reparse_point(path_before)
+        or not stat.S_ISREG(path_before.st_mode)
+    ):
+        raise ValueError(
+            f'diagnostic checkpoint must be a regular non-symlink file: {checkpoint_path}'
+        )
+
+    flags = os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NONBLOCK', 0)
+    if hasattr(os, 'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(checkpoint_path, flags)
+    except OSError as error:
+        raise ValueError(f'diagnostic checkpoint could not be opened safely: {checkpoint_path}: {error}') from error
 
     digest = hashlib.sha256()
     snapshot_path = None
     try:
-        with tempfile.NamedTemporaryFile(
-            mode='wb',
-            prefix='soul-action-',
-            suffix='.ckpt',
-            delete=False,
-        ) as snapshot:
-            snapshot_path = Path(snapshot.name)
-            with checkpoint_path.open('rb') as source:
-                for chunk in iter(lambda: source.read(1024 * 1024), b''):
+        with os.fdopen(descriptor, 'rb') as source:
+            before = os.fstat(source.fileno())
+            if (
+                _checkpoint_is_link_or_reparse_point(before)
+                or not stat.S_ISREG(before.st_mode)
+                or _checkpoint_file_identity(before) != _checkpoint_file_identity(path_before)
+            ):
+                raise ValueError('diagnostic checkpoint changed while it was being opened')
+            if before.st_size <= 0:
+                raise ValueError('diagnostic checkpoint is empty')
+            if before.st_size > MAX_CHECKPOINT_BYTES:
+                raise ValueError(
+                    f'diagnostic checkpoint exceeds size limit '
+                    f'({before.st_size} bytes; limit {MAX_CHECKPOINT_BYTES})'
+                )
+
+            with tempfile.NamedTemporaryFile(
+                mode='wb',
+                prefix='soul-action-',
+                suffix='.ckpt',
+                delete=False,
+            ) as snapshot:
+                snapshot_path = Path(snapshot.name)
+                total = 0
+                while True:
+                    chunk = source.read(min(1024 * 1024, MAX_CHECKPOINT_BYTES - total + 1))
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > MAX_CHECKPOINT_BYTES:
+                        raise ValueError(
+                            f'diagnostic checkpoint exceeds size limit '
+                            f'(limit {MAX_CHECKPOINT_BYTES} bytes)'
+                        )
                     digest.update(chunk)
                     snapshot.write(chunk)
-            snapshot.flush()
-            os.fsync(snapshot.fileno())
+                if total != before.st_size:
+                    raise ValueError('diagnostic checkpoint size changed while creating its snapshot')
+                snapshot.flush()
+                os.fsync(snapshot.fileno())
+
+            after = os.fstat(source.fileno())
+            try:
+                path_after = checkpoint_path.lstat()
+            except OSError as error:
+                raise ValueError('diagnostic checkpoint path changed during snapshot creation') from error
+            if (
+                _checkpoint_is_link_or_reparse_point(path_after)
+                or not stat.S_ISREG(path_after.st_mode)
+                or _checkpoint_file_identity(before) != _checkpoint_file_identity(after)
+                or _checkpoint_file_identity(after) != _checkpoint_file_identity(path_after)
+            ):
+                raise ValueError('diagnostic checkpoint changed during snapshot creation')
 
         actual_sha256 = digest.hexdigest()
-        if expected_sha256 is not None:
-            expected = expected_sha256.strip().lower()
-            if len(expected) != 64 or any(char not in '0123456789abcdef' for char in expected):
-                raise ValueError('expected checkpoint SHA-256 must be 64 lowercase hexadecimal characters')
-            if actual_sha256 != expected:
-                raise ValueError('diagnostic checkpoint SHA-256 does not match the expected digest')
+        if expected is not None and actual_sha256 != expected:
+            raise ValueError('diagnostic checkpoint SHA-256 does not match the expected digest')
 
         soul.load(str(snapshot_path))
         return actual_sha256

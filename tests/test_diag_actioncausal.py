@@ -70,9 +70,71 @@ class CheckpointBoundaryTests(unittest.TestCase):
                 self.skipTest('symlink creation is unavailable on this runner')
             with self.assertRaisesRegex(ValueError, 'must not be a symlink'):
                 checkpoint_exists_or_training(alias, allow_training=False)
+
+            class MustNotLoad:
+                def load(self, _path):
+                    raise AssertionError('a linked checkpoint must never be deserialized')
+
+            with self.assertRaisesRegex(ValueError, 'regular non-symlink file'):
+                load_checkpoint_snapshot(MustNotLoad(), alias)
         finally:
             alias.unlink(missing_ok=True)
             source.unlink(missing_ok=True)
+
+
+    def test_checkpoint_snapshot_rejects_oversized_file_before_load(self):
+        class MustNotLoad:
+            def load(self, _path):
+                raise AssertionError('oversized checkpoint must not be deserialized')
+
+        source = Path(tempfile.gettempdir()) / f'soul-action-oversized-{os.getpid()}.ckpt'
+        source.write_bytes(b'12345')
+        try:
+            with patch('soul.diag_actioncausal.MAX_CHECKPOINT_BYTES', 4):
+                with self.assertRaisesRegex(ValueError, 'exceeds size limit'):
+                    load_checkpoint_snapshot(MustNotLoad(), source)
+        finally:
+            source.unlink(missing_ok=True)
+
+    def test_provenance_hash_is_bounded(self):
+        source = Path(tempfile.gettempdir()) / f'soul-action-provenance-large-{os.getpid()}.bin'
+        source.write_bytes(b'12345')
+        try:
+            with patch('soul.diag_actioncausal.MAX_PROVENANCE_FILE_BYTES', 4):
+                with self.assertRaisesRegex(ValueError, 'provenance input exceeds size limit'):
+                    sha256_file(source)
+        finally:
+            source.unlink(missing_ok=True)
+
+    @unittest.skipIf(os.name == 'nt', 'open-file replacement semantics differ on Windows')
+    def test_checkpoint_snapshot_rejects_path_replacement_after_open(self):
+        class MustNotLoad:
+            def load(self, _path):
+                raise AssertionError('replaced checkpoint must not be deserialized')
+
+        source = Path(tempfile.gettempdir()) / f'soul-action-race-{os.getpid()}.ckpt'
+        replacement = Path(tempfile.gettempdir()) / f'soul-action-race-new-{os.getpid()}.ckpt'
+        source.write_bytes(b'original checkpoint')
+        replacement.write_bytes(b'replacement checkpoint')
+        original_open = os.open
+        replaced = False
+
+        def replace_after_open(path, flags, *args, **kwargs):
+            nonlocal replaced
+            descriptor = original_open(path, flags, *args, **kwargs)
+            if Path(path) == source and not replaced:
+                os.replace(replacement, source)
+                replaced = True
+            return descriptor
+
+        try:
+            with patch('soul.diag_actioncausal.os.open', side_effect=replace_after_open):
+                with self.assertRaisesRegex(ValueError, 'path changed while it was being opened'):
+                    load_checkpoint_snapshot(MustNotLoad(), source)
+            self.assertTrue(replaced)
+        finally:
+            source.unlink(missing_ok=True)
+            replacement.unlink(missing_ok=True)
 
 
 class ActionShuffleTests(unittest.TestCase):
