@@ -159,7 +159,7 @@ class CheckpointBoundaryTests(unittest.TestCase):
 
         try:
             with patch('soul.diag_actioncausal.os.open', side_effect=replace_after_open):
-                with self.assertRaisesRegex(ValueError, 'path changed while it was being opened'):
+                with self.assertRaisesRegex(ValueError, 'changed while it was being opened'):
                     sha256_file(source)
             self.assertTrue(replaced)
         finally:
