@@ -118,7 +118,7 @@ class G31TrainDataTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         path = Path(directory.name) / "train.jsonl"
         path.write_text(
-            "\\n".join(json.dumps(row) for row in (first, second)) + "\\n",
+            "\n".join(json.dumps(row) for row in (first, second)) + "\n",
             encoding="utf-8",
         )
 
