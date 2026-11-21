@@ -161,6 +161,8 @@ def measure_kl_series(s, rng, intervention='real', n_batches=10,
 
 def measure_ablation(s, seed, n_batches=10, interventions=INTERVENTIONS):
     """Measure every intervention from one paired latent-noise stream."""
+    if isinstance(n_batches, bool) or not isinstance(n_batches, int) or n_batches <= 0:
+        raise ValueError('n_batches must be a positive integer')
     kinds = tuple(interventions)
     if not kinds or len(set(kinds)) != len(kinds):
         raise ValueError('interventions must be a non-empty list of unique names')
@@ -177,7 +179,7 @@ def measure_ablation(s, seed, n_batches=10, interventions=INTERVENTIONS):
         cpu_state = torch.get_rng_state()
         cuda_states = torch.cuda.get_rng_state_all() if cuda_devices else None
         series = {}
-        valid_transitions = 0
+        valid_transitions = None
         for offset, kind in enumerate(kinds):
             torch.set_rng_state(cpu_state)
             if cuda_states is not None:
@@ -186,8 +188,19 @@ def measure_ablation(s, seed, n_batches=10, interventions=INTERVENTIONS):
                 s, np.random.default_rng(seed), kind,
                 n_batches=n_batches, intervention_seed=seed + 1000 + offset,
             )
+            if len(values) != n_batches:
+                raise ValueError(
+                    f'{kind} intervention returned {len(values)} batches; '
+                    f'expected {n_batches}'
+                )
+            if valid_transitions is None:
+                valid_transitions = count
+            elif count != valid_transitions:
+                raise ValueError(
+                    f'{kind} intervention valid-transition count differs from '
+                    f'the paired baseline ({count} != {valid_transitions})'
+                )
             series[kind] = values
-            valid_transitions = count
     return {'series': series, 'valid_transitions': valid_transitions}
 
 
@@ -202,7 +215,28 @@ def _stats(values):
 
 def summarize_ablation(result):
     """Per-intervention KL plus paired effects against the real-action run."""
+    if (
+        not isinstance(result, dict)
+        or not isinstance(result.get('series'), dict)
+        or not result['series']
+    ):
+        raise ValueError('ablation result must contain non-empty intervention series')
+
     series = result['series']
+    lengths = set()
+    for kind, values in series.items():
+        if not isinstance(values, (list, tuple)) or not values:
+            raise ValueError(f'{kind} intervention series must contain at least one batch')
+        if any(
+            isinstance(value, (bool, np.bool_))
+            or not isinstance(value, (int, float, np.integer, np.floating))
+            or not np.isfinite(value)
+            for value in values
+        ):
+            raise ValueError(f'{kind} intervention series must contain finite numeric values')
+        lengths.add(len(values))
+    if len(lengths) != 1:
+        raise ValueError('all intervention series must have the same number of paired batches')
     real = series.get('real')
     interventions = {
         kind: dict(_stats(values), per_episode_kl=list(values))
