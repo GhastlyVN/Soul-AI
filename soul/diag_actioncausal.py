@@ -347,6 +347,16 @@ def load_checkpoint_snapshot(soul, checkpoint_path, expected_sha256=None):
                 or _checkpoint_file_identity(before) != _checkpoint_file_identity(path_before)
             ):
                 raise ValueError('diagnostic checkpoint changed while it was being opened')
+            try:
+                path_after_open = checkpoint_path.lstat()
+            except OSError as error:
+                raise ValueError('diagnostic checkpoint path changed while it was being opened') from error
+            if (
+                _checkpoint_is_link_or_reparse_point(path_after_open)
+                or not stat.S_ISREG(path_after_open.st_mode)
+                or _checkpoint_file_identity(path_after_open) != _checkpoint_file_identity(before)
+            ):
+                raise ValueError('diagnostic checkpoint path changed while it was being opened')
             if before.st_size <= 0:
                 raise ValueError('diagnostic checkpoint is empty')
             if before.st_size > MAX_CHECKPOINT_BYTES:
