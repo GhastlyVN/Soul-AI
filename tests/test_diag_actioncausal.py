@@ -137,11 +137,11 @@ class ActionInterventionTests(unittest.TestCase):
         actions, valid = self._sequence()
         lag = intervene_actions(actions, valid, 'lag')
         self.assertEqual(lag[0, :, 0].tolist(), [0.0, 1.0, 2.0, 3.0])
-        self.assertEqual(lag[1, [0, 2, 3], 0].tolist(), [0.0, 10.0, 20.0, 30.0])
+        self.assertEqual(lag[1, [0, 2, 3], 0].tolist(), [0.0, 10.0, 30.0])
         self.assertEqual(lag[1, 1, 0].item(), 20.0)
         lead = intervene_actions(actions, valid, 'lead')
         self.assertEqual(lead[0, :, 0].tolist(), [2.0, 3.0, 4.0, 0.0])
-        self.assertEqual(lead[1, [0, 2, 3], 0].tolist(), [20.0, 30.0, 40.0, 0.0])
+        self.assertEqual(lead[1, [0, 2, 3], 0].tolist(), [30.0, 40.0, 0.0])
         self.assertEqual(lead[1, 1, 0].item(), 20.0)
 
     def test_shuffle_preserves_multiset_and_padding(self):
