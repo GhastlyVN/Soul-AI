@@ -1,7 +1,10 @@
 import pathlib
+import sys
 import tempfile
+import types
 import unittest
 
+sys.modules.setdefault("gymnasium", types.ModuleType("gymnasium"))
 from soul.g31.real_data import persist_episodes
 
 
