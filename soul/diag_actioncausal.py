@@ -142,12 +142,7 @@ def _masked_kl_mean(kl, valid):
 
 def measure_kl_series(s, rng, intervention='real', n_batches=10,
                       intervention_seed=0):
-    """Return per-batch valid-transition KL values and the transition count.
-
-    Terminal/padded boundary rows are excluded from the mean. Intervention
-    permutations use a private generator so they never consume the latent-noise
-    stream shared by every paired measurement.
-    """
+    """Return per-batch KL values for the legacy paired smoke diagnostic."""
     if intervention not in INTERVENTIONS:
         raise ValueError(f'unknown action intervention: {intervention!r}')
     values = []
@@ -166,27 +161,121 @@ def measure_kl_series(s, rng, intervention='real', n_batches=10,
             generator = torch.Generator(device=ac.device)
             generator.manual_seed(intervention_seed)
         ac = intervene_actions(ac, va, intervention, generator=generator)
+        metric_valid = va.clone()
+        if metric_valid.shape[1]:
+            # observe_sequence uses a zero action at t=0 because no preceding
+            # action is available. That row cannot measure action sensitivity.
+            metric_valid[:, 0] = 0
         with torch.no_grad():
             out = s.model.dynamics.observe_sequence(
                 oi, ac, s.model.encoder, va)
             kl = _kl_normal(out['prior_mu'], out['prior_lv'],
                             out['post_mu'], out['post_lv']).sum(-1)
-            kl = _masked_kl_mean(kl, va)
+            kl = _masked_kl_mean(kl, metric_valid)
         values.append(float(kl))
-        valid_transitions += int((va > 0).sum().item())
+        valid_transitions += int((metric_valid > 0).sum().item())
     return values, valid_transitions
 
 
-def measure_ablation(s, seed, n_batches=10, interventions=INTERVENTIONS):
-    """Measure every intervention from one paired latent-noise stream."""
-    if isinstance(n_batches, bool) or not isinstance(n_batches, int) or n_batches <= 0:
-        raise ValueError('n_batches must be a positive integer')
+def measure_episode_kl_series(s, episodes, intervention='real',
+                              intervention_seed=0):
+    """Measure one KL value per complete replay episode in stable index order."""
+    if intervention not in INTERVENTIONS:
+        raise ValueError(f'unknown action intervention: {intervention!r}')
+    device = torch.device(getattr(s, 'device', 'cpu'))
+    generator = None
+    if intervention == 'shuffle':
+        generator = torch.Generator(device=device)
+        generator.manual_seed(intervention_seed)
+
+    values = []
+    episode_indices = []
+    valid_transitions = 0
+    for episode_index, episode in episodes:
+        length = episode.length
+        if isinstance(length, bool) or not isinstance(length, int) or length <= 0:
+            raise ValueError(f'episode {episode_index} has an invalid length')
+        fields = (
+            episode.values, episode.masks, episode.texts,
+            episode.actions, episode.continues,
+        )
+        if any(len(field) != length for field in fields):
+            raise ValueError(f'episode {episode_index} has inconsistent field lengths')
+        try:
+            observations = np.concatenate((
+                np.stack(episode.values),
+                np.stack(episode.masks),
+                np.stack(episode.texts),
+            ), axis=-1)
+            actions = np.stack(episode.actions)
+            valid = np.asarray(episode.continues, dtype=np.float32)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f'episode {episode_index} contains malformed arrays') from error
+        if (
+            observations.ndim != 2
+            or actions.ndim != 2
+            or observations.shape[0] != length
+            or actions.shape[0] != length
+            or valid.shape != (length,)
+        ):
+            raise ValueError(f'episode {episode_index} has incompatible sequence shapes')
+        if (
+            not np.isfinite(observations).all()
+            or not np.isfinite(actions).all()
+            or not np.isfinite(valid).all()
+            or not np.logical_or(valid == 0, valid == 1).all()
+        ):
+            raise ValueError(f'episode {episode_index} contains non-finite or invalid values')
+
+        oi = torch.as_tensor(observations, dtype=torch.float32, device=device).unsqueeze(0)
+        ac = torch.as_tensor(actions, dtype=torch.float32, device=device).unsqueeze(0)
+        va = torch.as_tensor(valid, dtype=torch.float32, device=device).unsqueeze(0)
+        ac = intervene_actions(ac, va, intervention, generator=generator)
+
+        metric_valid = va.clone()
+        # The first observation has no preceding applied action; the model
+        # deliberately substitutes zero there. Exclude it from action effects.
+        metric_valid[:, 0] = 0
+        count = int((metric_valid > 0).sum().item())
+        if count == 0:
+            continue
+
+        with torch.no_grad():
+            out = s.model.dynamics.observe_sequence(
+                oi, ac, s.model.encoder, va)
+            kl = _kl_normal(out['prior_mu'], out['prior_lv'],
+                            out['post_mu'], out['post_lv']).sum(-1)
+            episode_kl = _masked_kl_mean(kl, metric_valid)
+        values.append(float(episode_kl))
+        episode_indices.append(int(episode_index))
+        valid_transitions += count
+
+    if not values:
+        raise ValueError('replay contains no episode with valid action-conditioned transitions')
+    return values, episode_indices, valid_transitions
+
+
+def measure_ablation(s, seed, max_episodes=None, interventions=INTERVENTIONS):
+    """Measure complete replay episodes from one paired latent-noise stream."""
+    if max_episodes is not None and (
+        isinstance(max_episodes, bool)
+        or not isinstance(max_episodes, int)
+        or max_episodes <= 0
+    ):
+        raise ValueError('max_episodes must be a positive integer when supplied')
     kinds = tuple(interventions)
     if not kinds or len(set(kinds)) != len(kinds):
         raise ValueError('interventions must be a non-empty list of unique names')
     for kind in kinds:
         if kind not in INTERVENTIONS:
             raise ValueError(f'unknown action intervention: {kind!r}')
+
+    episodes = list(enumerate(s.replay.episodes))
+    if max_episodes is not None:
+        episodes = episodes[-max_episodes:]
+    if not episodes:
+        raise ValueError('checkpoint replay buffer contains no episodes')
+
     cuda_devices = (
         list(range(torch.cuda.device_count())) if torch.cuda.is_available() else []
     )
@@ -197,19 +286,20 @@ def measure_ablation(s, seed, n_batches=10, interventions=INTERVENTIONS):
         cpu_state = torch.get_rng_state()
         cuda_states = torch.cuda.get_rng_state_all() if cuda_devices else None
         series = {}
+        episode_indices = None
         valid_transitions = None
         for offset, kind in enumerate(kinds):
             torch.set_rng_state(cpu_state)
             if cuda_states is not None:
                 torch.cuda.set_rng_state_all(cuda_states)
-            values, count = measure_kl_series(
-                s, np.random.default_rng(seed), kind,
-                n_batches=n_batches, intervention_seed=seed + 1000 + offset,
+            values, indices, count = measure_episode_kl_series(
+                s, episodes, kind, intervention_seed=seed + 1000 + offset,
             )
-            if len(values) != n_batches:
+            if episode_indices is None:
+                episode_indices = indices
+            elif indices != episode_indices:
                 raise ValueError(
-                    f'{kind} intervention returned {len(values)} batches; '
-                    f'expected {n_batches}'
+                    f'{kind} intervention episode order differs from the paired baseline'
                 )
             if valid_transitions is None:
                 valid_transitions = count
@@ -219,7 +309,11 @@ def measure_ablation(s, seed, n_batches=10, interventions=INTERVENTIONS):
                     f'the paired baseline ({count} != {valid_transitions})'
                 )
             series[kind] = values
-    return {'series': series, 'valid_transitions': valid_transitions}
+    return {
+        'series': series,
+        'episode_indices': episode_indices,
+        'valid_transitions': valid_transitions,
+    }
 
 
 def _stats(values):
@@ -232,7 +326,7 @@ def _stats(values):
 
 
 def summarize_ablation(result):
-    """Per-intervention KL plus paired effects against the real-action run."""
+    """Per-episode KL plus paired effects against the real-action run."""
     if (
         not isinstance(result, dict)
         or not isinstance(result.get('series'), dict)
@@ -244,7 +338,7 @@ def summarize_ablation(result):
     lengths = set()
     for kind, values in series.items():
         if not isinstance(values, (list, tuple)) or not values:
-            raise ValueError(f'{kind} intervention series must contain at least one batch')
+            raise ValueError(f'{kind} intervention series must contain at least one episode')
         if any(
             isinstance(value, (bool, np.bool_))
             or not isinstance(value, (int, float, np.integer, np.floating))
@@ -254,7 +348,29 @@ def summarize_ablation(result):
             raise ValueError(f'{kind} intervention series must contain finite numeric values')
         lengths.add(len(values))
     if len(lengths) != 1:
-        raise ValueError('all intervention series must have the same number of paired batches')
+        raise ValueError('all intervention series must have the same number of paired episodes')
+
+    episode_indices = result.get('episode_indices')
+    if (
+        not isinstance(episode_indices, (list, tuple))
+        or len(episode_indices) != next(iter(lengths))
+        or any(
+            isinstance(index, bool)
+            or not isinstance(index, (int, np.integer))
+            or index < 0
+            for index in episode_indices
+        )
+        or len(set(episode_indices)) != len(episode_indices)
+    ):
+        raise ValueError('episode_indices must uniquely identify every reported episode')
+    valid_transitions = result.get('valid_transitions')
+    if (
+        isinstance(valid_transitions, bool)
+        or not isinstance(valid_transitions, (int, np.integer))
+        or valid_transitions <= 0
+    ):
+        raise ValueError('valid_transitions must be a positive integer')
+
     real = series.get('real')
     interventions = {
         kind: dict(_stats(values), per_episode_kl=list(values))
@@ -269,7 +385,8 @@ def summarize_ablation(result):
     return {
         'interventions': interventions,
         'paired_effects_vs_real': paired,
-        'valid_transitions': result['valid_transitions'],
+        'episode_indices': list(episode_indices),
+        'valid_transitions': int(valid_transitions),
     }
 
 
@@ -602,7 +719,10 @@ def main():
     ap.add_argument('--steps', type=int, default=1200)
     ap.add_argument('--warmup-episodes', type=int, default=30)
     ap.add_argument('--learn-per-collect', type=int, default=20)
-    ap.add_argument('--batches', type=int, default=10)
+    ap.add_argument('--batches', type=int, default=10,
+                    help='batch count for the legacy paired smoke diagnostic')
+    ap.add_argument('--episodes', type=int, default=None,
+                    help='maximum complete replay episodes for --matrix (default: all)')
     ap.add_argument('--matrix', action='store_true',
                     help='measure all action interventions with paired RNG')
     ap.add_argument('--report', help='write a machine-readable JSON report')
@@ -664,7 +784,7 @@ def main():
         print('  xong.')
 
     if args.matrix:
-        result = measure_ablation(s, args.seed + 7, n_batches=args.batches)
+        result = measure_ablation(s, args.seed + 7, max_episodes=args.episodes)
         summary = summarize_ablation(result)
         _banner('Action intervention matrix (exploratory; DRAFT_NOT_LOCKED)')
         for kind, values in result['series'].items():
@@ -697,12 +817,14 @@ def main():
                     'numpy': np.__version__,
                     'device': str(getattr(s, 'device', 'unknown')),
                     'seed': args.seed,
-                    'n_batches': args.batches,
+                    'episode_count': len(result['episode_indices']),
+                    'episode_indices': summary['episode_indices'],
+                    'valid_transitions': summary['valid_transitions'],
                     'interventions': list(INTERVENTIONS),
                 },
                 'summary': summary,
                 'limitations': [
-                    'The matrix samples the replay buffer embedded in the checkpoint.',
+                    'The matrix evaluates complete episodes from the checkpoint-embedded replay buffer; it is not the external PILOT split.',
                     'Optional --train-path and --pilot-path values are hashed only; they are not scoring inputs.',
                     'Physical prediction deltas are not measured by this diagnostic.',
                 ],

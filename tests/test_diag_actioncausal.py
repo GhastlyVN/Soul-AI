@@ -1,9 +1,11 @@
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
 import torch
 
 from soul.diag_actioncausal import (
@@ -15,6 +17,7 @@ from soul.diag_actioncausal import (
     sha256_file,
     intervene_actions,
     measure_ablation,
+    measure_episode_kl_series,
     measure_paired_actions,
     summarize_ablation,
 )
@@ -369,68 +372,128 @@ class MaskedKLMetricsTests(unittest.TestCase):
 
 
 class AblationReportTests(unittest.TestCase):
-    def test_ablation_is_deterministic_and_pairs_latent_and_replay_streams(self):
-        calls = []
+    @staticmethod
+    def _episode(actions, valid):
+        length = len(actions)
+        return SimpleNamespace(
+            length=length,
+            values=[np.asarray([float(i)], dtype=np.float32) for i in range(length)],
+            masks=[np.asarray([1.0], dtype=np.float32) for _ in range(length)],
+            texts=[np.asarray([0.0], dtype=np.float32) for _ in range(length)],
+            actions=[np.asarray([float(value)], dtype=np.float32) for value in actions],
+            continues=[float(value) for value in valid],
+        )
 
-        def fake_series(_s, rng, kind, n_batches=10, intervention_seed=0):
-            calls.append((kind, intervention_seed, int(rng.integers(0, 1000)),
-                          float(torch.rand(()))))
-            return [1.0 + index for index in range(n_batches)], n_batches * 8
+    @staticmethod
+    def _soul(episodes, stochastic=False):
+        class FakeDynamics:
+            def observe_sequence(self, _obs, actions, _encoder, _valid):
+                conditioned = actions.clone()
+                conditioned[:, 0] = 0
+                if stochastic:
+                    conditioned = conditioned + torch.rand_like(conditioned)
+                zeros = torch.zeros_like(conditioned)
+                return {
+                    'prior_mu': zeros,
+                    'prior_lv': zeros,
+                    'post_mu': conditioned,
+                    'post_lv': zeros,
+                }
 
-        interventions = ('real', 'zero', 'negate')
-        with patch('soul.diag_actioncausal.measure_kl_series', side_effect=fake_series):
-            first = measure_ablation(None, seed=5, n_batches=2,
-                                     interventions=interventions)
-            first_calls = list(calls)
-            calls.clear()
-            second = measure_ablation(None, seed=5, n_batches=2,
-                                      interventions=interventions)
-            second_calls = list(calls)
+        return SimpleNamespace(
+            replay=SimpleNamespace(episodes=episodes),
+            model=SimpleNamespace(dynamics=FakeDynamics(), encoder=None),
+            device=torch.device('cpu'),
+        )
+
+    def test_episode_matrix_reports_complete_episodes_and_excludes_unconditioned_boundaries(self):
+        episodes = [
+            self._episode([100.0, 2.0, 1000.0], [1.0, 1.0, 0.0]),
+            self._episode([100.0, 3.0, 1000.0, 1000.0], [1.0, 1.0, 0.0, 0.0]),
+        ]
+        soul = self._soul(episodes)
+        real, indices, real_count = measure_episode_kl_series(
+            soul, list(enumerate(episodes)), 'real'
+        )
+        zero, zero_indices, zero_count = measure_episode_kl_series(
+            soul, list(enumerate(episodes)), 'zero'
+        )
+
+        self.assertEqual(indices, [0, 1])
+        self.assertEqual(zero_indices, indices)
+        self.assertEqual(real_count, 2)
+        self.assertEqual(zero_count, real_count)
+        self.assertTrue(all(value > 0 for value in real))
+        self.assertEqual(zero, [0.0, 0.0])
+
+    def test_ablation_is_deterministic_and_pairs_episode_order_and_latent_rng(self):
+        episodes = [
+            self._episode([0.5, 1.0, 2.0], [1.0, 1.0, 0.0]),
+            self._episode([0.25, 2.0, 1.0, 0.0], [1.0, 1.0, 1.0, 0.0]),
+        ]
+        soul = self._soul(episodes, stochastic=True)
+        interventions = ('real', 'zero', 'shuffle')
+        first = measure_ablation(
+            soul, seed=5, max_episodes=2, interventions=interventions
+        )
+        second = measure_ablation(
+            soul, seed=5, max_episodes=2, interventions=interventions
+        )
 
         self.assertEqual(first, second)
-        self.assertEqual([call[0] for call in first_calls], list(interventions))
-        self.assertEqual([call[0] for call in second_calls], list(interventions))
-        self.assertEqual(len({call[1] for call in first_calls}), len(interventions))
-        self.assertEqual(len({call[2] for call in first_calls}), 1)
-        self.assertEqual(len({call[3] for call in first_calls}), 1)
-        self.assertEqual(first_calls, second_calls)
+        self.assertEqual(first['episode_indices'], [0, 1])
+        self.assertEqual(first['valid_transitions'], 3)
+        self.assertTrue(all(len(values) == 2 for values in first['series'].values()))
+        summary = summarize_ablation(first)
+        self.assertEqual(summary['episode_indices'], [0, 1])
+        self.assertEqual(
+            len(summary['interventions']['real']['per_episode_kl']), 2
+        )
 
     def test_ablation_rejects_duplicate_or_unknown_interventions(self):
+        soul = self._soul([self._episode([1.0, 0.0], [1.0, 0.0])])
         with self.assertRaisesRegex(ValueError, 'unique'):
-            measure_ablation(None, seed=1, interventions=('real', 'real'))
+            measure_ablation(soul, seed=1, interventions=('real', 'real'))
         with self.assertRaisesRegex(ValueError, 'unknown action intervention'):
-            measure_ablation(None, seed=1, interventions=('real', 'bogus'))
+            measure_ablation(soul, seed=1, interventions=('real', 'bogus'))
 
-    def test_ablation_requires_positive_integer_batch_count(self):
-        for n_batches in (0, -1, True, 1.5):
-            with self.subTest(n_batches=n_batches):
+    def test_ablation_requires_positive_integer_episode_limit(self):
+        soul = self._soul([self._episode([1.0, 0.0], [1.0, 0.0])])
+        for max_episodes in (0, -1, True, 1.5):
+            with self.subTest(max_episodes=max_episodes):
                 with self.assertRaisesRegex(ValueError, 'positive integer'):
-                    measure_ablation(None, seed=1, n_batches=n_batches)
+                    measure_ablation(soul, seed=1, max_episodes=max_episodes)
 
-    def test_ablation_rejects_missing_batches_and_mismatched_transition_counts(self):
+    def test_ablation_rejects_empty_replay_and_mismatched_episode_sets(self):
+        empty = self._soul([])
+        with self.assertRaisesRegex(ValueError, 'contains no episodes'):
+            measure_ablation(empty, seed=1)
+
+        soul = self._soul([self._episode([1.0, 0.0], [1.0, 0.0])])
+
+        def mismatched(_s, episodes, kind, intervention_seed=0):
+            indices = [0] if kind == 'real' else [1]
+            return [1.0], indices, 1
+
         with patch(
-            'soul.diag_actioncausal.measure_kl_series',
-            return_value=([1.0], 8),
+            'soul.diag_actioncausal.measure_episode_kl_series',
+            side_effect=mismatched,
         ):
-            with self.assertRaisesRegex(ValueError, 'expected 2'):
-                measure_ablation(None, seed=1, n_batches=2, interventions=('real',))
-
-        def mismatched_count(_s, _rng, kind, n_batches=10, intervention_seed=0):
-            return [1.0] * n_batches, 8 if kind == 'real' else 7
-
-        with patch(
-            'soul.diag_actioncausal.measure_kl_series',
-            side_effect=mismatched_count,
-        ):
-            with self.assertRaisesRegex(ValueError, 'valid-transition count differs'):
-                measure_ablation(
-                    None, seed=1, n_batches=2, interventions=('real', 'zero')
-                )
+            with self.assertRaisesRegex(ValueError, 'episode order differs'):
+                measure_ablation(soul, seed=1, interventions=('real', 'zero'))
 
     def test_summary_rejects_mismatched_paired_series_lengths(self):
-        with self.assertRaisesRegex(ValueError, 'same number of paired batches'):
+        with self.assertRaisesRegex(ValueError, 'same number of paired episodes'):
             summarize_ablation({
                 'series': {'real': [1.0, 2.0], 'zero': [3.0]},
+                'episode_indices': [0, 1],
+                'valid_transitions': 8,
+            })
+
+    def test_summary_rejects_missing_episode_indices(self):
+        with self.assertRaisesRegex(ValueError, 'episode_indices'):
+            summarize_ablation({
+                'series': {'real': [1.0]},
                 'valid_transitions': 8,
             })
 
@@ -441,9 +504,10 @@ class AblationReportTests(unittest.TestCase):
             {'real': [1.0], 'zero': [True]},
         ):
             with self.subTest(series=series):
-                with self.assertRaisesRegex(ValueError, 'at least one batch|finite numeric'):
+                with self.assertRaisesRegex(ValueError, 'at least one episode|finite numeric'):
                     summarize_ablation({
                         'series': series,
+                        'episode_indices': [0],
                         'valid_transitions': 8,
                     })
 
