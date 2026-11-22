@@ -70,7 +70,6 @@ def test_evaluator_rejects_nonfinite_and_out_of_range_actions():
         raise AssertionError(f"invalid Pendulum action was accepted: {action!r}")
 
 
-
 def test_evaluator_rejects_boolean_strings_and_float32_rounded_outside_actions():
     for action in (True, '1.0', 2.00000001, -2.00000001):
         try:
@@ -78,7 +77,6 @@ def test_evaluator_rejects_boolean_strings_and_float32_rounded_outside_actions()
         except ValueError:
             continue
         raise AssertionError(f"invalid Pendulum action was accepted: {action!r}")
-
 def test_no_recursive_imagination():
     class Dynamics:
         def initial_state(self, batch, device): return torch.zeros(batch, 3), torch.zeros(batch, 3)
@@ -131,6 +129,22 @@ def test_metrics_per_episode_equal_weight():
     m = [compute_metrics(np.array([1,2]), np.array([1,2]))]
     agg = aggregate_episode_metrics(m)
     assert agg['mse']['count'] == 1
+
+
+def test_metrics_reject_nonfinite_episode_values():
+    good = compute_metrics(np.array([1.0, 2.0]), np.array([1.0, 2.0]))
+    for bad in (np.nan, np.inf, -np.inf):
+        try:
+            compute_metrics(np.array([1.0, bad]), np.array([1.0, 2.0]))
+        except ValueError:
+            continue
+        raise AssertionError(f"non-finite prediction was accepted: {bad!r}")
+    poisoned = dict(good, mse=float('nan'))
+    try:
+        aggregate_episode_metrics([good, poisoned])
+    except ValueError:
+        return
+    raise AssertionError('non-finite episode metric was accepted')
 
 
 def test_pendulum_observation_to_physical_state():
