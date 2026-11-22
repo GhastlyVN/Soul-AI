@@ -246,11 +246,23 @@ def _commit_staged_outputs(staged):
 
 
 def verify_model_unchanged(before, model):
-    """Fail closed if evaluating the frozen checkpoint mutated the model."""
+    """Fail closed if evaluation changes, adds, or removes checkpoint state."""
     after = model.state_dict()
-    changed = [name for name, value in before.items() if not torch.equal(value, after[name])]
+    before_names = set(before)
+    after_names = set(after)
+    changed = sorted(
+        [f"removed:{name}" for name in before_names - after_names]
+        + [f"added:{name}" for name in after_names - before_names]
+        + [
+            name
+            for name in before_names & after_names
+            if not torch.equal(before[name], after[name])
+        ]
+    )
     if changed:
-        raise RuntimeError('frozen checkpoint model changed during evaluation: ' + ', '.join(changed))
+        raise RuntimeError(
+            'frozen checkpoint model changed during evaluation: ' + ', '.join(changed)
+        )
 
 def run(checkpoint_path=None, predictions_path=None, metrics_path=None,
         report_path=None, allow_overwrite=False):
