@@ -147,11 +147,7 @@ def _preflight_zip_stream(stream, archive_path: Path) -> tuple[int, int]:
         end_record_offset = endrec[9]
         if disk_number != 0 or central_disk != 0 or entries_on_disk != entries_total:
             raise ValueError(f"multi-disk ZIP archives are not supported: {archive_path}")
-        if (
-            entries_total == 0xFFFF
-            or central_size == 0xFFFFFFFF
-            or central_offset == 0xFFFFFFFF
-        ):
+        if central_size == 0xFFFFFFFF or central_offset == 0xFFFFFFFF:
             raise ValueError(f"ZIP64 end-of-central-directory record is incomplete: {archive_path}")
         if entries_total > MAX_ARCHIVE_ENTRIES:
             raise ValueError(
