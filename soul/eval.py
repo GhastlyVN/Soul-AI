@@ -33,6 +33,14 @@ except ImportError:  # pragma: no cover - run as a script
     from verify import collect_episodes, make_config
 
 
+def _output_path(parser, raw):
+    """Evaluation output must be a regular file, never a link or a folder."""
+    path = Path(raw)
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        parser.error(f'--out is not a regular file: {path}')
+    return path
+
+
 def _banner(text):
     print(f'\n{"=" * 72}\n{text}\n{"=" * 72}')
 
@@ -221,7 +229,7 @@ def main():
     args = parser.parse_args()
     _validate_args(parser, args)
 
-    output_path = Path(args.out)
+    output_path = _output_path(parser, args.out)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     env_template = PendulumEnv()
     k = env_template.k
