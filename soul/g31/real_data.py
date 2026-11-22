@@ -8,6 +8,8 @@ import numpy as np
 import gymnasium as gym
 from pathlib import Path
 import json
+import os
+import tempfile
 from soul.g31.collector import record_transition
 
 ENV_ID = 'Pendulum-v1'
@@ -56,12 +58,55 @@ def run_collection():
 
 
 def persist_episodes(episodes, path):
-    """Persist already collected transitions without mixing or overwriting."""
+    """Atomically publish a complete dataset without overwriting an existing path.
+
+    The temporary file is created beside the destination, flushed to disk, then
+    hard-linked into place. The final link operation is atomic and fails if any
+    file or symlink already occupies the destination (including a dangling link).
+    """
     target = Path(path)
-    if target.exists():
-        raise FileExistsError(f'refusing to overwrite existing dataset: {target}')
     target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open('x', encoding='utf-8') as stream:
-        for episode in episodes:
-            for transition in episode:
-                stream.write(json.dumps(transition, sort_keys=True) + '\n')
+
+    try:
+        target.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise FileExistsError(f'refusing to overwrite existing dataset: {target}')
+
+    temporary_path = None
+    published = False
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode='w',
+            encoding='utf-8',
+            dir=target.parent,
+            prefix=f'.{target.name}.',
+            suffix='.tmp',
+            delete=False,
+        ) as stream:
+            temporary_path = Path(stream.name)
+            for episode in episodes:
+                for transition in episode:
+                    stream.write(json.dumps(transition, sort_keys=True) + '\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+
+        try:
+            os.link(temporary_path, target)
+        except FileExistsError as error:
+            raise FileExistsError(
+                f'refusing to overwrite existing dataset: {target}'
+            ) from error
+        published = True
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                # A successfully published dataset is complete; a leftover
+                # temporary hard link is preferable to reporting a false failure.
+                if not published:
+                    raise
