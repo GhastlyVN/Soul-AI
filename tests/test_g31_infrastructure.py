@@ -1,4 +1,3 @@
-successfully downloaded text file (SHA: efafc733c853601e8def314af0e84d4850329a96)
 """G3.1 infrastructure tests — semantics, not existence.
 """
 import numpy as np
@@ -79,7 +78,6 @@ def test_evaluator_rejects_boolean_strings_and_float32_rounded_outside_actions()
         except ValueError:
             continue
         raise AssertionError(f"invalid Pendulum action was accepted: {action!r}")
-
 
 def test_no_recursive_imagination():
     class Dynamics:
