@@ -583,6 +583,7 @@ class AblationReportTests(unittest.TestCase):
     def test_summary_keeps_per_episode_values_and_paired_effects(self):
         result = {
             'series': {'real': [1.0, 3.0], 'zero': [2.0, 5.0]},
+            'episode_indices': [0, 1],
             'valid_transitions': 12,
         }
         summary = summarize_ablation(result)
