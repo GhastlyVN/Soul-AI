@@ -144,6 +144,10 @@ def episode_metrics(records, prediction_key):
 
 def paired_differences(model_metrics, baseline_metrics):
     keys = sorted(model_metrics)
+    if not keys:
+        raise ValueError('no episode metrics to compare')
+    if sorted(baseline_metrics) != keys:
+        raise ValueError('paired metrics cover different episodes')
     metric_names = sorted(model_metrics[keys[0]])
     return {
         metric: {
@@ -157,6 +161,8 @@ def paired_differences(model_metrics, baseline_metrics):
 
 def aggregate_episode_metrics(metrics_by_episode):
     episode_values = list(metrics_by_episode.values())
+    if not episode_values:
+        raise ValueError('no episode metrics to aggregate')
     names = sorted(episode_values[0])
     return {
         name: {
