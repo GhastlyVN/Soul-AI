@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import stat
 import tempfile
 from collections import defaultdict
 from pathlib import Path
@@ -53,9 +54,14 @@ def sha256(path):
 
 def load_frozen_checkpoint(path):
     """Hash a disk-backed snapshot before deserializing an allowlisted checkpoint."""
+    source_path = Path(path)
+    # shortcut: lstat happens before open; upgrade to an fd-based check if paths can be swapped.
+    metadata = source_path.lstat()
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(f'frozen checkpoint must be a regular non-symlink file: {source_path}')
     digest = hashlib.sha256()
     total_bytes = 0
-    with Path(path).open('rb') as source, tempfile.TemporaryFile(mode='w+b') as snapshot:
+    with source_path.open('rb') as source, tempfile.TemporaryFile(mode='w+b') as snapshot:
         for chunk in iter(lambda: source.read(1024 * 1024), b''):
             total_bytes += len(chunk)
             if total_bytes > MAX_FROZEN_CHECKPOINT_BYTES:
