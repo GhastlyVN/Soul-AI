@@ -245,6 +245,13 @@ def _commit_staged_outputs(staged):
             backup.unlink(missing_ok=True)
 
 
+def verify_model_unchanged(before, model):
+    """Fail closed if evaluating the frozen checkpoint mutated the model."""
+    after = model.state_dict()
+    changed = [name for name, value in before.items() if not torch.equal(value, after[name])]
+    if changed:
+        raise RuntimeError('frozen checkpoint model changed during evaluation: ' + ', '.join(changed))
+
 def run(checkpoint_path=None, predictions_path=None, metrics_path=None,
         report_path=None, allow_overwrite=False):
     # Resolve paths
@@ -353,8 +360,7 @@ def run(checkpoint_path=None, predictions_path=None, metrics_path=None,
                 'pilot_sha256': pilot_sha256,
                 'train_sha256': train_sha256,
             })
-    after = model.state_dict()
-    assert all(torch.equal(before[name], after[name]) for name in before)
+    verify_model_unchanged(before, model)
     model_ep = episode_metrics(records, 'predicted_physical')
     persistence_ep = episode_metrics(records, 'persistence_physical')
     mean_ep = episode_metrics(records, 'mean_delta_physical')
