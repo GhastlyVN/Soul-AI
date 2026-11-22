@@ -75,39 +75,79 @@ def parse_jsonl_object(line: str, source: Path, line_no: int) -> Dict:
 
 
 
+
 def _file_identity(metadata):
-    return (
+    identity = (
         metadata.st_dev, metadata.st_ino, metadata.st_size,
-        metadata.st_mtime_ns, metadata.st_ctime_ns,
+        metadata.st_mtime_ns,
+    )
+    # Windows st_ctime is creation time, not a reliable mutation timestamp.
+    if os.name != 'nt':
+        return (*identity, metadata.st_ctime_ns)
+    return identity
+
+
+def _is_link_or_reparse_point(metadata):
+    return stat.S_ISLNK(metadata.st_mode) or bool(
+        getattr(metadata, 'st_file_attributes', 0) & 0x400
     )
 
 
 def read_file_snapshot(path, max_bytes):
-    """Read one bounded regular-file snapshot and hash the exact bytes returned."""
+    """Read one bounded regular-file snapshot without following links or blocking on FIFOs."""
     source = Path(path)
-    path_before = source.lstat()
-    if not stat.S_ISREG(path_before.st_mode):
+    try:
+        path_before = source.lstat()
+    except OSError as error:
+        raise ValueError(f'dataset source is unavailable: {source}') from error
+    if _is_link_or_reparse_point(path_before) or not stat.S_ISREG(path_before.st_mode):
         raise ValueError(f'dataset source must be a regular non-symlink file: {source}')
-    with source.open('rb') as stream:
+
+    flags = os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NONBLOCK', 0)
+    if hasattr(os, 'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(source, flags)
+    except OSError as error:
+        raise ValueError(f'dataset source could not be opened safely: {source}: {error}') from error
+
+    with os.fdopen(descriptor, 'rb') as stream:
         before = os.fstat(stream.fileno())
-        if not stat.S_ISREG(before.st_mode) or _file_identity(before) != _file_identity(path_before):
+        if (
+            _is_link_or_reparse_point(before)
+            or not stat.S_ISREG(before.st_mode)
+            or _file_identity(before) != _file_identity(path_before)
+        ):
             raise RuntimeError(f'dataset changed before it could be read: {source}')
+        try:
+            path_after_open = source.lstat()
+        except OSError as error:
+            raise RuntimeError(f'dataset path changed while it was being opened: {source}') from error
+        if (
+            _is_link_or_reparse_point(path_after_open)
+            or not stat.S_ISREG(path_after_open.st_mode)
+            or _file_identity(path_after_open) != _file_identity(before)
+        ):
+            raise RuntimeError(f'dataset path changed while it was being opened: {source}')
         if before.st_size > max_bytes:
             raise ValueError(f'dataset exceeds the maximum snapshot size of {max_bytes} bytes: {source}')
+
         raw = stream.read(max_bytes + 1)
         after = os.fstat(stream.fileno())
-    if len(raw) > max_bytes:
-        raise ValueError(f'dataset exceeds the maximum snapshot size of {max_bytes} bytes: {source}')
-    try:
-        path_after = source.lstat()
-    except OSError as error:
-        raise RuntimeError(f'dataset path changed while it was being read: {source}') from error
-    if (
-        len(raw) != before.st_size
-        or _file_identity(before) != _file_identity(after)
-        or _file_identity(after) != _file_identity(path_after)
-    ):
-        raise RuntimeError(f'dataset changed while it was being read: {source}')
+        if len(raw) > max_bytes:
+            raise ValueError(f'dataset exceeds the maximum snapshot size of {max_bytes} bytes: {source}')
+        try:
+            path_after = source.lstat()
+        except OSError as error:
+            raise RuntimeError(f'dataset path changed while it was being read: {source}') from error
+        if (
+            len(raw) != before.st_size
+            or _file_identity(before) != _file_identity(after)
+            or _file_identity(after) != _file_identity(path_after)
+            or _is_link_or_reparse_point(path_after)
+            or not stat.S_ISREG(path_after.st_mode)
+        ):
+            raise RuntimeError(f'dataset changed while it was being read: {source}')
     return raw, hashlib.sha256(raw).hexdigest()
 
 
