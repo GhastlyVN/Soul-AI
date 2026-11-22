@@ -107,7 +107,7 @@ class G31TrainDataTests(unittest.TestCase):
                 return descriptor
 
             with patch("soul.g31.train_data.os.open", side_effect=open_then_replace):
-                with self.assertRaisesRegex(RuntimeError, "path changed while it was being opened"):
+                with self.assertRaisesRegex(RuntimeError, "changed before it could be read|path changed while it was being opened"):
                     read_file_snapshot(source, 1024)
 
     def test_committed_train_dataset_matches_the_strict_schema(self):
