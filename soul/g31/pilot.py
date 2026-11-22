@@ -27,8 +27,10 @@ def run_pilot():
 
     # Integrity checks
     check_split_disjoint(train + pilot)
-    assert all(t['split'] == 'train' for t in train)
-    assert all(t['split'] == 'pilot' for t in pilot)
+    if not all(t['split'] == 'train' for t in train):
+        raise ValueError("synthetic train fixture contains a non-train row")
+    if not all(t['split'] == 'pilot' for t in pilot):
+        raise ValueError("synthetic pilot fixture contains a non-pilot row")
     # Confirm untouched
     confirm_accessed = False
 
