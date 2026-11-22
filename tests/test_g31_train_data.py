@@ -42,7 +42,7 @@ class G31TrainDataTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(digest, hashlib.sha256(encoded).hexdigest())
 
-    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks are unavailable")
+    @unittest.skipUnless(hasattr(os, "symlink") and os.name != "nt", "POSIX symlinks required")
     def test_snapshot_rejects_symlink_input(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -91,6 +91,7 @@ class G31TrainDataTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "opened safely|changed before"):
                     read_file_snapshot(source, 1024)
 
+    @unittest.skipIf(os.name == "nt", "open-file replacement semantics differ on Windows")
     def test_snapshot_rejects_path_replacement_after_open(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
