@@ -167,6 +167,19 @@ def test_rejects_too_many_entries_before_zipfile_parsing(tmp_path: Path):
             inspect_package(archive)
 
 
+def test_preflight_accepts_exactly_65535_zip_entries(tmp_path: Path):
+    # 0xFFFF is a valid standard-ZIP entry count when no ZIP64 locator is present.
+    archive = tmp_path / "65535-entries.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as zf:
+        for index in range(0xFFFF):
+            zf.writestr(f"entry-{index:05d}.bin", b"")
+
+    with archive.open("rb") as stream:
+        entries, _ = inspector._preflight_zip_stream(stream, archive)
+
+    assert entries == 0xFFFF
+
+
 def test_rejects_duplicate_json_keys(tmp_path: Path):
     archive = tmp_path / "duplicate-json.zip"
     with zipfile.ZipFile(archive, "w") as zf:
