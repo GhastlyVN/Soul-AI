@@ -13,6 +13,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
+from contextlib import contextmanager
 import platform
 import subprocess
 import time
@@ -34,11 +36,89 @@ except ImportError:  # pragma: no cover - run as a script
 
 
 def _output_path(parser, raw):
-    """Evaluation output must be a regular file, never a link or a folder."""
+    """Reject an already-invalid output path before doing any expensive work."""
     path = Path(raw)
     if path.is_symlink() or (path.exists() and not path.is_file()):
         parser.error(f'--out is not a regular file: {path}')
     return path
+
+
+def _is_reparse_point(metadata):
+    reparse_attribute = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)
+    return stat.S_ISLNK(metadata.st_mode) or bool(
+        getattr(metadata, 'st_file_attributes', 0) & reparse_attribute
+    )
+
+
+def _file_identity(metadata):
+    identity = (
+        metadata.st_dev, metadata.st_ino, metadata.st_mode,
+        metadata.st_size, metadata.st_mtime_ns,
+    )
+    # On Windows st_ctime is creation time; it is not a mutation timestamp.
+    if os.name == 'nt':
+        return identity
+    return (*identity, metadata.st_ctime_ns)
+
+
+@contextmanager
+def _open_append_output(path):
+    """Open the append target once and keep writes on its verified file handle."""
+    path = Path(path)
+    try:
+        before = path.lstat()
+    except FileNotFoundError:
+        before = None
+    except OSError as error:
+        raise ValueError(f'cannot inspect evaluation output path: {path}: {error}') from error
+
+    if before is not None and (
+        _is_reparse_point(before) or not stat.S_ISREG(before.st_mode)
+    ):
+        raise ValueError(f'evaluation output must be a regular non-link file: {path}')
+
+    flags = (
+        os.O_WRONLY | os.O_APPEND
+        | getattr(os, 'O_BINARY', 0)
+        | getattr(os, 'O_NONBLOCK', 0)
+    )
+    if hasattr(os, 'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    # A missing path is created exclusively. This prevents a link or other entry
+    # inserted after lstat() from being followed on platforms without O_NOFOLLOW.
+    if before is None:
+        flags |= os.O_CREAT | os.O_EXCL
+
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError as error:
+        raise ValueError(f'evaluation output could not be opened safely: {path}: {error}') from error
+
+    try:
+        opened = os.fstat(descriptor)
+        if _is_reparse_point(opened) or not stat.S_ISREG(opened.st_mode):
+            raise ValueError(f'evaluation output is not a regular file: {path}')
+        if before is not None and _file_identity(before) != _file_identity(opened):
+            raise ValueError(f'evaluation output changed while it was being opened: {path}')
+
+        try:
+            after = path.lstat()
+        except OSError as error:
+            raise ValueError(f'evaluation output changed while it was being opened: {path}') from error
+        if (
+            _is_reparse_point(after)
+            or not stat.S_ISREG(after.st_mode)
+            or _file_identity(after) != _file_identity(opened)
+        ):
+            raise ValueError(f'evaluation output changed while it was being opened: {path}')
+
+        with os.fdopen(descriptor, 'a', encoding='utf-8') as log_file:
+            descriptor = None
+            yield log_file
+            log_file.flush()
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _banner(text):
@@ -334,7 +414,7 @@ def main():
           f'updates={args.steps}, warmup={args.warmup_episodes}, '
           f'plan_samples={args.plan_samples}')
 
-    with output_path.open('a', encoding='utf-8') as log_file:
+    with _open_append_output(output_path) as log_file:
         for seed in args.seeds:
             _banner(f'Seed {seed} — train {args.steps} optimizer updates')
             baseline = {
