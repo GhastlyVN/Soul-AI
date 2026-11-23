@@ -11,7 +11,7 @@ FORBIDDEN = (
     "test_inverted_move",
     "test_tree_dry",
 )
-SCAN_ROOTS = ("scripts", "skills", "monitor", "safety")
+SCAN_ROOTS = ("scripts", "skills", "monitor", "safety", "soul")
 
 
 class NoTestShockLeakTests(unittest.TestCase):
