@@ -26,7 +26,10 @@ def check_split_disjoint(episodes: List[Dict[str, Any]]) -> None:
         split = ep.get('split')
         if split not in seeds:
             raise ValueError(f'unknown split: {split}')
-        seeds[split].add(ep.get('episode_seed'))
+        seed = ep.get('episode_seed')
+        if seed is None:
+            raise ValueError('episode is missing episode_seed; split disjointness cannot be verified')
+        seeds[split].add(seed)
     if seeds['train'] & seeds['pilot'] or seeds['train'] & seeds['confirm']:
         raise ValueError('train seed overlaps another split')
     if seeds['pilot'] & seeds['confirm']:
