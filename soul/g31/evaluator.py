@@ -33,7 +33,11 @@ def wrapped_angle_error(pred_theta, true_theta):
 
 def physical_metrics(predicted, target):
     """Calculate theta-wrapped and linear-velocity metrics in physical units."""
-    error = np.asarray(predicted, dtype=np.float64) - np.asarray(target, dtype=np.float64)
+    predicted = np.asarray(predicted, dtype=np.float64)
+    target = np.asarray(target, dtype=np.float64)
+    if not (np.isfinite(predicted).all() and np.isfinite(target).all()):
+        raise ValueError('physical metrics require finite predictions and targets')
+    error = predicted - target
     error[..., 0] = wrapped_angle_error(predicted[..., 0], target[..., 0])
     return {
         'theta_mse': float(np.mean(error[..., 0] ** 2)),
@@ -50,7 +54,7 @@ def physical_metrics(predicted, target):
 def inverse_squash(value):
     """Invert ObsEncoder.squash without silently clipping invalid output."""
     value = np.asarray(value, dtype=np.float32)
-    if np.any(np.abs(value) >= 1.0):
+    if not np.isfinite(value).all() or np.any(np.abs(value) >= 1.0):
         raise ValueError('decoder value outside invertible squash range')
     return value / (1.0 - np.abs(value))
 
