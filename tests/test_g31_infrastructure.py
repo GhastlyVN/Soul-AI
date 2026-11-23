@@ -133,6 +133,22 @@ def test_metrics_per_episode_equal_weight():
     assert agg['mse']['count'] == 1
 
 
+def test_metrics_reject_nonfinite_episode_values():
+    good = compute_metrics(np.array([1.0, 2.0]), np.array([1.0, 2.0]))
+    for bad in (np.nan, np.inf, -np.inf):
+        try:
+            compute_metrics(np.array([1.0, bad]), np.array([1.0, 2.0]))
+        except ValueError:
+            continue
+        raise AssertionError(f"non-finite prediction was accepted: {bad!r}")
+    poisoned = dict(good, mse=float('nan'))
+    try:
+        aggregate_episode_metrics([good, poisoned])
+    except ValueError:
+        return
+    raise AssertionError('non-finite episode metric was accepted')
+
+
 def test_pendulum_observation_to_physical_state():
     theta = 2.0
     raw = np.array([np.cos(theta), np.sin(theta), 3.5], dtype=np.float32)
