@@ -1,7 +1,9 @@
 """G3.1 Pilot scorer. Reads Pilot + TRAIN only; never opens Confirm."""
+from contextlib import contextmanager
 import hashlib
 import json
 import os
+import stat
 import tempfile
 from collections import defaultdict
 from pathlib import Path
@@ -51,11 +53,98 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def _checkpoint_file_identity(metadata):
+    identity = (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+    )
+    # Windows st_ctime is a creation timestamp, not a mutation timestamp.
+    if os.name == 'nt':
+        return identity
+    return (*identity, metadata.st_ctime_ns)
+
+
+def _checkpoint_is_link_or_reparse_point(metadata):
+    reparse_attribute = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)
+    return stat.S_ISLNK(metadata.st_mode) or bool(
+        getattr(metadata, 'st_file_attributes', 0) & reparse_attribute
+    )
+
+
+@contextmanager
+def _open_regular_checkpoint(path):
+    """Open one regular checkpoint handle and verify its identity before and after reading."""
+    path = Path(path)
+    try:
+        before = path.lstat()
+    except FileNotFoundError:
+        raise
+    except OSError as error:
+        raise ValueError(f'frozen checkpoint path cannot be inspected: {path}: {error}') from error
+    if _checkpoint_is_link_or_reparse_point(before) or not stat.S_ISREG(before.st_mode):
+        raise ValueError(f'frozen checkpoint must be a regular non-symlink file: {path}')
+
+    flags = os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NONBLOCK', 0)
+    if hasattr(os, 'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ValueError(f'frozen checkpoint could not be opened safely: {path}: {error}') from error
+
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            _checkpoint_is_link_or_reparse_point(opened)
+            or not stat.S_ISREG(opened.st_mode)
+            or _checkpoint_file_identity(before) != _checkpoint_file_identity(opened)
+        ):
+            raise ValueError(f'frozen checkpoint path changed while it was being opened: {path}')
+        try:
+            after_open = path.lstat()
+        except OSError as error:
+            raise ValueError(
+                f'frozen checkpoint path changed while it was being opened: {path}'
+            ) from error
+        if (
+            _checkpoint_is_link_or_reparse_point(after_open)
+            or not stat.S_ISREG(after_open.st_mode)
+            or _checkpoint_file_identity(after_open) != _checkpoint_file_identity(opened)
+        ):
+            raise ValueError(f'frozen checkpoint path changed while it was being opened: {path}')
+
+        with os.fdopen(descriptor, 'rb') as source:
+            descriptor = None
+            try:
+                yield source
+            finally:
+                after_read = os.fstat(source.fileno())
+                try:
+                    path_after = path.lstat()
+                except OSError as error:
+                    raise ValueError(
+                        f'frozen checkpoint path changed while it was being read: {path}'
+                    ) from error
+                if (
+                    _checkpoint_file_identity(opened) != _checkpoint_file_identity(after_read)
+                    or _checkpoint_file_identity(after_read) != _checkpoint_file_identity(path_after)
+                    or _checkpoint_is_link_or_reparse_point(path_after)
+                    or not stat.S_ISREG(path_after.st_mode)
+                ):
+                    raise ValueError(f'frozen checkpoint changed while it was being read: {path}')
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def load_frozen_checkpoint(path):
     """Hash a disk-backed snapshot before deserializing an allowlisted checkpoint."""
+    source_path = Path(path)
     digest = hashlib.sha256()
     total_bytes = 0
-    with Path(path).open('rb') as source, tempfile.TemporaryFile(mode='w+b') as snapshot:
+    with _open_regular_checkpoint(source_path) as source, tempfile.TemporaryFile(mode='w+b') as snapshot:
         for chunk in iter(lambda: source.read(1024 * 1024), b''):
             total_bytes += len(chunk)
             if total_bytes > MAX_FROZEN_CHECKPOINT_BYTES:
