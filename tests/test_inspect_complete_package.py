@@ -1,8 +1,10 @@
 import hashlib
 import io
 import json
+import os
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -130,6 +132,54 @@ def test_rejects_oversized_archive_before_hashing(tmp_path: Path):
                 inspect_package(archive)
 
 
+def test_rejects_oversized_central_directory_before_zipfile_parsing(tmp_path: Path):
+    archive = tmp_path / "large-central-directory.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", '{"schema_version":1}')
+
+    with (
+        patch.object(inspector, "MAX_CENTRAL_DIRECTORY_BYTES", 1),
+        patch.object(
+            inspector.zipfile,
+            "ZipFile",
+            side_effect=AssertionError("central directory must be bounded before ZipFile"),
+        ),
+    ):
+        with pytest.raises(ValueError, match="ZIP central directory exceeds the size limit"):
+            inspect_package(archive)
+
+
+def test_rejects_too_many_entries_before_zipfile_parsing(tmp_path: Path):
+    archive = tmp_path / "entry-count-preflight.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("one.bin", b"1")
+        zf.writestr("two.bin", b"2")
+
+    with (
+        patch.object(inspector, "MAX_ARCHIVE_ENTRIES", 1),
+        patch.object(
+            inspector.zipfile,
+            "ZipFile",
+            side_effect=AssertionError("entry count must be bounded before ZipFile"),
+        ),
+    ):
+        with pytest.raises(ValueError, match="too many ZIP entries"):
+            inspect_package(archive)
+
+
+def test_preflight_accepts_exactly_65535_zip_entries(tmp_path: Path):
+    # 0xFFFF is a valid standard-ZIP entry count when no ZIP64 locator is present.
+    archive = tmp_path / "65535-entries.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as zf:
+        for index in range(0xFFFF):
+            zf.writestr(f"entry-{index:05d}.bin", b"")
+
+    with archive.open("rb") as stream:
+        entries, _ = inspector._preflight_zip_stream(stream, archive)
+
+    assert entries == 0xFFFF
+
+
 def test_rejects_duplicate_json_keys(tmp_path: Path):
     archive = tmp_path / "duplicate-json.zip"
     with zipfile.ZipFile(archive, "w") as zf:
@@ -228,6 +278,85 @@ def test_rejects_symlink_entries(tmp_path: Path):
         zf.writestr(info, "target")
     with pytest.raises(ValueError, match="symlink entry refused"):
         inspect_package(archive)
+
+
+def test_rejects_symlink_archive_input(tmp_path: Path):
+    archive = tmp_path / "source.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", '{"schema_version":1}')
+    alias = tmp_path / "alias.zip"
+    try:
+        alias.symlink_to(archive)
+    except (OSError, NotImplementedError) as error:
+        pytest.skip(f"symlinks are unavailable: {error}")
+
+    with pytest.raises(ValueError, match="regular non-symlink ZIP archive"):
+        inspect_package(alias)
+
+
+def test_rejects_fifo_archive_input_before_opening(tmp_path: Path):
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("FIFO creation is unavailable on this platform")
+    fifo = tmp_path / "archive.pipe"
+    os.mkfifo(fifo)
+
+    with patch.object(
+        inspector.os,
+        "open",
+        side_effect=AssertionError("special files must be rejected before open"),
+    ):
+        with pytest.raises(ValueError, match="regular non-symlink ZIP archive"):
+            inspect_package(fifo)
+
+
+
+def test_rejects_windows_reparse_point_archive_input_before_open(tmp_path: Path, monkeypatch):
+    archive = tmp_path / "reparse.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", '{"schema_version":1}')
+
+    original_lstat = Path.lstat
+
+    def report_reparse_point(path, *args, **kwargs):
+        metadata = original_lstat(path, *args, **kwargs)
+        if Path(path) == archive:
+            return SimpleNamespace(st_mode=metadata.st_mode, st_file_attributes=0x400)
+        return metadata
+
+    monkeypatch.setattr(Path, "lstat", report_reparse_point)
+    with patch.object(
+        inspector.os,
+        "open",
+        side_effect=AssertionError("reparse points must be rejected before opening"),
+    ):
+        with pytest.raises(ValueError, match="regular non-symlink ZIP archive"):
+            inspect_package(archive)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="open-file replacement semantics differ on Windows")
+def test_rejects_archive_path_replacement_after_open(tmp_path: Path, monkeypatch):
+    archive = tmp_path / "source.zip"
+    replacement = tmp_path / "replacement.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", '{"schema_version":1}')
+    with zipfile.ZipFile(replacement, "w") as zf:
+        zf.writestr("manifest.json", '{"schema_version":2}')
+
+    original_open = os.open
+    replaced = False
+
+    def replace_after_open(path, flags, *args, **kwargs):
+        nonlocal replaced
+        descriptor = original_open(path, flags, *args, **kwargs)
+        if Path(path) == archive and not replaced:
+            os.replace(replacement, archive)
+            replaced = True
+        return descriptor
+
+    monkeypatch.setattr(inspector.os, "open", replace_after_open)
+    with pytest.raises(ValueError, match="ZIP archive changed while it was being opened"):
+        inspect_package(archive)
+    assert replaced
 
 
 
