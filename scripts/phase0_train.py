@@ -12,6 +12,7 @@ import torch
 
 from soul.config import Config
 from soul.memory import Episode
+from soul.safe_io import open_output
 from soul.soul import Soul
 from minicraft import MiniCraftSafetyController
 
@@ -241,8 +242,9 @@ def main():
                    args.device)
     report = Path(args.report)
     report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_text(json.dumps(result, indent=2, ensure_ascii=False,
-                                 allow_nan=False) + '\n', encoding='utf-8')
+    with open_output(report, append=False) as report_file:
+        report_file.write(json.dumps(result, indent=2, ensure_ascii=False,
+                                     allow_nan=False) + '\n')
     print(json.dumps({key: result[key] for key in
                       ('transitions', 'episodes_loaded', 'updates', 'checkpoint_sha256', 'final_losses')},
                      indent=2, ensure_ascii=False))

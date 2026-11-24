@@ -12,6 +12,7 @@ import numpy as np
 import torch
 
 from soul.config import Config
+from soul.safe_io import open_output
 from soul.soul import Soul
 from wm_api import CostMeter, SoulAdapter
 
@@ -99,7 +100,7 @@ def measure(output: str | Path, warmup: int = 5, reps: int = 30,
 
     path = Path(output)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open('w', encoding='utf-8', newline='\n') as f:
+    with open_output(path, append=False) as f:
         for record in records:
             f.write(json.dumps(record, allow_nan=False) + '\n')
     return records

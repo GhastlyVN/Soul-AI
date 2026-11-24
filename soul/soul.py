@@ -20,12 +20,14 @@ import numpy as np
 import torch
 
 try:
+    from .safe_io import open_output
     from .config import Config
     from .obs import ObsEncoder
     from .model import SoulModel
     from .memory import Episode, ReplayBuffer, MemoryManager
     from .trainer import Trainer
 except ImportError:  # pragma: no cover - chạy trực tiếp như script
+    from safe_io import open_output
     from config import Config
     from obs import ObsEncoder
     from model import SoulModel
@@ -583,7 +585,8 @@ class Soul:
         }
         if extra:
             state.update(extra)
-        torch.save(state, p)
+        with open_output(p, append=False, binary=True) as stream:
+            torch.save(state, stream)
 
     def load(self, path: str):
         """Nạp checkpoint, phục hồi nguyên trạng."""
