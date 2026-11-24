@@ -16,6 +16,14 @@ class SoulRegressionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'plan_elite'):
             ModelConfig(plan_elite=0)
 
+    def test_observation_budgets_must_be_positive(self):
+        from soul.config import ObsConfig
+
+        with self.assertRaisesRegex(ValueError, 'max_features'):
+            ObsConfig(max_features=0)
+        with self.assertRaisesRegex(ValueError, 'text_buckets'):
+            ObsConfig(text_buckets=0)
+
     def test_action_columns_keep_their_own_dimension(self):
         from soul.dataset import _to_action
 
