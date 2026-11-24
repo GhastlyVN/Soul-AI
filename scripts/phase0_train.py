@@ -18,6 +18,8 @@ from minicraft import MiniCraftSafetyController
 
 
 TRAIN_MIN, TRAIN_MAX = 0, 999
+MAX_DATA_BYTES = 64 * 1024 * 1024
+MAX_DATA_ROWS = 200_000
 
 
 def _canonical_observation(observation) -> str:
@@ -85,12 +87,29 @@ def _validate_transition_rows(rows: list[dict]) -> dict:
     return grouped
 
 
+def _load_rows(path: str | Path) -> tuple[list[dict], str]:
+    """Read a train JSONL with hard caps, hashing the exact bytes consumed."""
+    rows = []
+    digest = hashlib.sha256()
+    total = 0
+    with Path(path).open('rb') as handle:
+        for line in handle:
+            total += len(line)
+            if total > MAX_DATA_BYTES:
+                raise ValueError('training JSONL is too large')
+            digest.update(line)
+            if len(rows) >= MAX_DATA_ROWS:
+                raise ValueError('training JSONL has too many rows')
+            if line.strip():
+                rows.append(json.loads(line))
+    return rows, digest.hexdigest()
+
+
 def train(data_path: str | Path, checkpoint_path: str | Path,
           updates: int = 1000, hidden_dim: int = 64, latent_dim: int = 16,
           seq_len: int = 16, batch_size: int = 16, seed: int = 0,
           device: str | None = None) -> dict:
-    rows = [json.loads(line) for line in Path(data_path).read_text(
-        encoding='utf-8').splitlines() if line.strip()]
+    rows, data_sha256 = _load_rows(data_path)
     if not rows:
         raise ValueError('training JSONL is empty')
     if any(row.get('split') != 'train'
@@ -152,7 +171,6 @@ def train(data_path: str | Path, checkpoint_path: str | Path,
     git_status = subprocess.run(
         ['git', 'status', '--porcelain'], capture_output=True, text=True,
         check=False).stdout.strip()
-    data_sha256 = hashlib.sha256(Path(data_path).read_bytes()).hexdigest()
     protocol_sha256 = hashlib.sha256(
         Path('configs/phase0_protocol_draft.yaml').read_bytes()).hexdigest()
     source_hashes = {
