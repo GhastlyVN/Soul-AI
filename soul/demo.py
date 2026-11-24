@@ -120,10 +120,11 @@ def run_episode(soul: Soul, env: PendulumEnv, rng, train: bool = True) -> Dict[s
     obs = env._obs()
     for _ in range(200):
         action = soul.act(obs, deterministic=not train)
-        obs, reward, done, _ = env.step(action)
+        obs, reward, done, info = env.step(action)
         total_reward += reward
         steps_run += 1
-        soul.observe(obs, action, reward, done)
+        soul.observe(obs, action, reward, done,
+                     applied_action=info['applied_action'])
         if train:
             losses = soul.learn()
             if losses:
