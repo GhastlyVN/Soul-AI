@@ -177,10 +177,9 @@ def train(data_path: str | Path, checkpoint_path: str | Path,
         'protocol_config_sha256': protocol_sha256,
         'source_sha256': source_hashes,
     }
-    soul.save(str(checkpoint))
-    checkpoint_state = torch.load(checkpoint, map_location='cpu', weights_only=False)
-    checkpoint_state['phase0_provenance'] = checkpoint_provenance
-    torch.save(checkpoint_state, checkpoint)
+    # Attach provenance before writing: reloading the just-saved path would let a
+    # swapped checkpoint into the report and re-save under the provenance hash.
+    soul.save(str(checkpoint), extra={'phase0_provenance': checkpoint_provenance})
     return {
         'schema_version': 2,
         'kind': 'phase0_train',
