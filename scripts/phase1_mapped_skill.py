@@ -1,5 +1,6 @@
 """Smoke-run an observation-only mapped skill against the privileged expert."""
 
+from soul.safe_io import open_output, write_text_safe
 import argparse
 from datetime import datetime, timezone
 import hashlib
@@ -147,7 +148,7 @@ def run(eval_seeds: list[int], output_dir: str | Path,
         child = output / task
         child.mkdir(parents=True, exist_ok=True)
         trace_path = child / 'trace.jsonl'
-        with trace_path.open('w', encoding='utf-8', newline='\n') as f:
+        with open_output(trace_path, append=False) as f:
             for row in traces:
                 f.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + '\n')
         manifest = {
@@ -183,7 +184,7 @@ def run(eval_seeds: list[int], output_dir: str | Path,
             'limits': aggregate['limits'],
         }
         manifest_path = child / 'manifest.json'
-        manifest_path.write_text(
+        write_text_safe(manifest_path, 
             json.dumps(manifest, indent=2, ensure_ascii=False, allow_nan=False) + '\n',
             encoding='utf-8')
         aggregate['tasks'][task] = {
@@ -196,7 +197,7 @@ def run(eval_seeds: list[int], output_dir: str | Path,
               f'expert={manifest["expert_success_fraction"]:.3f}')
 
     aggregate_path = output / 'manifest.json'
-    aggregate_path.write_text(
+    write_text_safe(aggregate_path, 
         json.dumps(aggregate, indent=2, ensure_ascii=False, allow_nan=False) + '\n',
         encoding='utf-8')
     print(f'Mapped-skill manifest: {aggregate_path}')

@@ -1,5 +1,6 @@
 """Run the alpha compressed observation-only skill."""
 
+from soul.safe_io import write_text_safe
 import argparse
 from datetime import datetime, timezone
 import hashlib
@@ -513,7 +514,7 @@ def run(output_dir: str | Path, *, train_seeds: list[int],
         task_dir = output / task
         task_dir.mkdir(parents=True, exist_ok=True)
         skill_path = task_dir / 'skill.json'
-        skill_path.write_text(
+        write_text_safe(skill_path, 
             json.dumps(artifact, indent=2, ensure_ascii=False, allow_nan=False) + '\n',
             encoding='utf-8')
         episodes = [_episode(task, seed, artifact, max_ticks) for seed in eval_seeds]
@@ -553,7 +554,7 @@ def run(output_dir: str | Path, *, train_seeds: list[int],
             'limits': aggregate['limits'],
         }
         manifest_path = task_dir / 'manifest.json'
-        manifest_path.write_text(
+        write_text_safe(manifest_path, 
             json.dumps(manifest, indent=2, ensure_ascii=False, allow_nan=False) + '\n',
             encoding='utf-8')
         aggregate['tasks'][task] = {
@@ -567,7 +568,7 @@ def run(output_dir: str | Path, *, train_seeds: list[int],
             f'{task}: success={manifest["success_fraction"]:.3f}, '
             f'learned_agreement={manifest["learned_agreement_fraction"]:.3f}')
     aggregate_path = output / 'manifest.json'
-    aggregate_path.write_text(
+    write_text_safe(aggregate_path, 
         json.dumps(aggregate, indent=2, ensure_ascii=False, allow_nan=False) + '\n',
         encoding='utf-8')
     validate_manifest(output)

@@ -1,5 +1,6 @@
 """Run one Candidate MiniCraft expert-skill episode as an alpha smoke."""
 
+from soul.safe_io import open_output, write_text_safe
 import argparse
 from datetime import datetime, timezone
 import hashlib
@@ -43,7 +44,7 @@ def run(output_dir: str | Path, *, task: str = 'T_wood', seed: int = 5,
     observation = env.observe()
     steps = 0
     result = None
-    with trace_path.open('w', encoding='utf-8', newline='\n') as trace:
+    with open_output(trace_path, append=False) as trace:
         while not env.done:
             proposal = skill.propose(observation, env)
             decision = safety.filter(observation, proposal.candidate_action)
@@ -83,7 +84,7 @@ def run(output_dir: str | Path, *, task: str = 'T_wood', seed: int = 5,
     success = bool(result['task_success'][task])
     skill.record_episode_result(success)
     card = skill.card()
-    card_path.write_text(
+    write_text_safe(card_path, 
         json.dumps(card, indent=2, ensure_ascii=False, allow_nan=False) + '\n',
         encoding='utf-8')
     revision = subprocess.run(
@@ -110,7 +111,7 @@ def run(output_dir: str | Path, *, task: str = 'T_wood', seed: int = 5,
             'Candidate skill is not calibrated, generalized, or compute-validated.',
         ],
     }
-    manifest_path.write_text(
+    write_text_safe(manifest_path, 
         json.dumps(manifest, indent=2, ensure_ascii=False, allow_nan=False) + '\n',
         encoding='utf-8')
     print(f'{task}: success={success}, steps={steps}, skill={card["status"]}')

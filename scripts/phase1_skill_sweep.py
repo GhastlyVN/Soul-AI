@@ -4,6 +4,7 @@ This is a train-seed smoke utility. It does not lock held-out variants or
 promote any skill.
 """
 
+from soul.safe_io import write_text_safe
 import argparse
 from datetime import datetime, timezone
 import hashlib
@@ -104,7 +105,7 @@ def run_sweep(seed_start: int, seed_count: int, source_root: str | Path,
             'episodes_per_controller': len(seeds),
         }
         task_manifest_path = output / task / 'manifest.json'
-        task_manifest_path.write_text(
+        write_text_safe(task_manifest_path, 
             json.dumps(task_manifest, indent=2, ensure_ascii=False, allow_nan=False) + '\n',
             encoding='utf-8')
         task_results[task]['manifest_sha256'] = hashlib.sha256(
@@ -127,7 +128,7 @@ def run_sweep(seed_start: int, seed_count: int, source_root: str | Path,
         ],
     }
     manifest_path = output / 'sweep_manifest.json'
-    manifest_path.write_text(
+    write_text_safe(manifest_path, 
         json.dumps(manifest, indent=2, ensure_ascii=False, allow_nan=False) + '\n',
         encoding='utf-8')
     manifest['sweep_manifest_sha256'] = hashlib.sha256(
