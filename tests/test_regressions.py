@@ -4,13 +4,18 @@ import unittest
 
 import numpy as np
 
-from soul.config import Config
+from soul.config import Config, ModelConfig
 from soul.demo import PendulumEnv
 from soul.obs import ObsEncoder
 from soul.soul import Soul
 
 
 class SoulRegressionTests(unittest.TestCase):
+    def test_plan_elite_must_be_positive(self):
+        # topk(..., 0) yields an empty elite set and silently poisons CEM with NaN.
+        with self.assertRaisesRegex(ValueError, 'plan_elite'):
+            ModelConfig(plan_elite=0)
+
     def test_time_feature_keeps_information_across_long_horizon(self):
         enc = ObsEncoder()
         t0 = enc.encode({'time': 0})['values'][enc._schema['time']]

@@ -65,6 +65,8 @@ class ModelConfig:
                 f'discrete_dim ({self.discrete_dim}) phải nằm trong '
                 f'[0, action_dim ({self.action_dim})].'
             )
+        if self.plan_elite < 1:
+            raise ValueError('plan_elite must be positive.')
         if self.plan_elite >= self.plan_samples:
             raise ValueError('plan_elite phải nhỏ hơn plan_samples.')
         if self.latent_dim < 2:
