@@ -52,6 +52,41 @@ class SoulRegressionTests(unittest.TestCase):
         self.assertAlmostEqual(env_clipped.x, env_raw.x, places=5)
         self.assertAlmostEqual(env_clipped.v, env_raw.v, places=5)
 
+    def test_demo_records_applied_action(self):
+        from soul.demo import run_episode
+
+        class FakeEnv:
+            def reset(self, rng=None):
+                return self._obs()
+
+            def _obs(self):
+                return {'state': {'position': 0.0, 'velocity': 0.0}, 'time': 0}
+
+            def step(self, action):
+                applied = np.clip(action, -1.0, 1.0)
+                return self._obs(), 0.0, True, {'applied_action': applied}
+
+            def goal_vec(self):
+                return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+
+        class RecordingSoul:
+            def __init__(self):
+                self.actions = []
+
+            def set_goal(self, goal):
+                pass
+
+            def act(self, obs, deterministic=False):
+                return np.array([2.0], dtype=np.float32)
+
+            def observe(self, obs, action, reward, done, applied_action=None):
+                self.actions.append(
+                    np.asarray(action if applied_action is None else applied_action))
+
+        soul = RecordingSoul()
+        run_episode(soul, FakeEnv(), None, train=False)
+        np.testing.assert_allclose(soul.actions[0], [1.0])
+
     def test_action_effect_predictor_is_available(self):
         cfg = Config()
         cfg.model.hidden_dim = 32
