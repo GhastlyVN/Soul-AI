@@ -292,5 +292,13 @@ class Config:
     @classmethod
     def load(cls, path: str) -> 'Config':
         import json
-        with open(path, 'r', encoding='utf-8') as f:
-            return cls.from_dict(json.load(f))
+        try:
+            from .safe_io import read_regular_bytes
+        except ImportError:  # pragma: no cover - run as a script
+            from safe_io import read_regular_bytes
+        raw = read_regular_bytes(path, max_bytes=1024 * 1024, label='config')
+        try:
+            value = json.loads(raw.decode('utf-8'))
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+            raise ValueError(f'invalid config: {exc}') from exc
+        return cls.from_dict(value)

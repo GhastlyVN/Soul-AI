@@ -30,3 +30,9 @@ def test_archive_memory_save_refuses_symlink(tmp_path):
     with pytest.raises(ValueError):
         ArchiveMemory().save(str(alias))
     assert victim.read_text(encoding='utf-8') == 'keep\n'
+
+def test_config_load_caps_the_json_file(tmp_path):
+    path = tmp_path / 'config.json'
+    path.write_text('{"padding": "' + 'x' * (1024 * 1024 + 1) + '"}', encoding='utf-8')
+    with pytest.raises(ValueError, match='exceeds'):
+        Config.load(str(path))

@@ -664,3 +664,9 @@ def test_compressed_manifest_validator_parses_hashed_skill_bytes(tmp_path, monke
         phase1_compressed_skill, '_read_json_object', reopen_guard)
     phase1_compressed_skill.validate_manifest(tmp_path)
 
+def test_validate_manifest_caps_the_aggregate_json(tmp_path):
+    (tmp_path / 'manifest.json').write_bytes(
+        b'{"padding": "' + b'x' * (8 * 1024 * 1024 + 1) + b'"}'
+    )
+    with pytest.raises(ValueError, match='exceeds'):
+        validate_manifest(tmp_path)

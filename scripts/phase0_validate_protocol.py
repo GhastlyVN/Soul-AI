@@ -8,6 +8,8 @@ import argparse
 from pathlib import Path
 from typing import Any
 
+from soul.safe_io import read_regular_bytes
+
 import yaml
 
 
@@ -51,13 +53,14 @@ def _range(value: Any, label: str) -> tuple[int, int]:
 
 def _load(path: Path) -> dict[str, Any]:
     try:
-        with path.open(encoding="utf-8") as stream:
-            return _mapping(
-                yaml.load(stream, Loader=_UniqueKeySafeLoader), str(path))
-    except FileNotFoundError as exc:
+        raw = read_regular_bytes(path, max_bytes=1024 * 1024, label=str(path))
+    except (FileNotFoundError, ValueError) as exc:
         raise ProtocolValidationError(f"missing protocol file: {path}") from exc
-    except yaml.YAMLError as exc:
+    try:
+        value = yaml.load(raw.decode("utf-8"), Loader=_UniqueKeySafeLoader)
+    except (UnicodeDecodeError, yaml.YAMLError, RecursionError) as exc:
         raise ProtocolValidationError(f"invalid YAML in {path}: {exc}") from exc
+    return _mapping(value, str(path))
 
 
 def validate_protocol(protocol_path: Path = PROTOCOL_PATH,
