@@ -149,6 +149,15 @@ def read_npz(path: str, action_dim: int, goal_dim: int) -> List[Dict[str, Any]]:
     else:
         act = np.zeros((len(z['reward']), action_dim), np.float32)
     n = len(act)
+    if act.ndim != 2 or act.shape[1] != action_dim:
+        raise ValueError(
+            f'NPZ action table must have shape (n, {action_dim}), got {act.shape}')
+    for k in names:
+        if k in ('ep', 'done', 'reward') or k.startswith('obs__'):
+            size = len(np.atleast_1d(z[k]))
+            if size != n:
+                raise ValueError(
+                    f'NPZ field {k} has {size} rows, expected {n}')
 
     # Gom cac bien `obs__*` vao mot dict chung.
     fields = {}
