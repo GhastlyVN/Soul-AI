@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from minicraft import MiniCraftEnv, MiniCraftSafetyController
+from soul.safe_io import open_output
 
 
 TRAIN_MIN, TRAIN_MAX = 0, 999
@@ -37,7 +38,7 @@ def collect(path: str | Path, seeds: list[int], steps_per_seed: int,
     output.parent.mkdir(parents=True, exist_ok=True)
     rows = 0
     safety = MiniCraftSafetyController()
-    with output.open('w', encoding='utf-8', newline='\n') as f:
+    with open_output(output, append=False) as f:
         for seed in seeds:
             env = MiniCraftEnv(seed=int(seed), max_ticks=max_ticks)
             obs = env.observe()
