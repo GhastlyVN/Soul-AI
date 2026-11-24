@@ -25,7 +25,7 @@ def _file_identity(metadata):
 
 
 @contextmanager
-def open_output(path, *, append=False, binary=False):
+def open_output(path, *, append=False, binary=False, newline=None):
     """Yield a verified handle to `path`, refusing links and path swaps."""
     path = Path(path)
     try:
@@ -78,7 +78,7 @@ def open_output(path, *, append=False, binary=False):
         mode = ('ab' if append else 'wb') if binary else ('a' if append else 'w')
         options = {} if binary else {'encoding': 'utf-8'}
         if not binary and not append:
-            options['newline'] = '\n'
+            options['newline'] = '\n' if newline is None else newline
         with os.fdopen(descriptor, mode, **options) as stream:
             descriptor = None
             if not append:

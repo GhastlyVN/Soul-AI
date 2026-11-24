@@ -348,7 +348,11 @@ def make_sample_csv(path: str, n_ep: int = 8, length: int = 120,
     """
     rng = np.random.default_rng(seed)
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
-    with open(path, 'w', newline='', encoding='utf-8') as f:
+    try:
+        from .safe_io import open_output
+    except ImportError:  # pragma: no cover - run as a script
+        from safe_io import open_output
+    with open_output(path, append=False, newline='') as f:
         w = csv.writer(f)
         w.writerow(['ep', 'done', 'reward', 'a0',
                     'position', 'velocity', 'temperature'])
