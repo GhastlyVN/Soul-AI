@@ -229,7 +229,7 @@ class Trainer:
         with torch.no_grad():
             rew_stats['mean'] += 0.01 * (rewards.mean().item()
                                          - rew_stats['mean'])
-            rew_stats['std'] += 0.01 * (rewards.std().item()
+            rew_stats['std'] += 0.01 * (rewards.std(unbiased=False).item()
                                         - rew_stats['std'])
 
         # --- 4. CONTINUE ---

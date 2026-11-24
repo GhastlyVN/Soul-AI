@@ -87,6 +87,34 @@ class SoulRegressionTests(unittest.TestCase):
         run_episode(soul, FakeEnv(), None, train=False)
         np.testing.assert_allclose(soul.actions[0], [1.0])
 
+    def test_reward_stats_stay_finite_for_one_row_batch(self):
+        cfg = Config()
+        cfg.obs.max_features = 4
+        cfg.obs.text_buckets = 4
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 1
+        cfg.model.goal_dim = 2
+        cfg.train.imagine_horizon = 2
+        cfg.train.seq_len = 1
+        soul = Soul(cfg)
+
+        batch = {
+            'values': np.zeros((1, 2, cfg.obs.max_features), np.float32),
+            'masks': np.ones((1, 2, cfg.obs.max_features), np.float32),
+            'texts': np.zeros((1, 2, cfg.obs.text_buckets), np.float32),
+            'actions': np.zeros((1, 1, cfg.model.action_dim), np.float32),
+            'rewards': np.full((1, 1), -0.5, np.float32),
+            'continues': np.ones((1, 1), np.float32),
+            'goals': np.zeros((1, 1, cfg.model.goal_dim), np.float32),
+            'valid': np.ones((1, 1), np.float32),
+        }
+
+        losses = soul.trainer.update(batch)
+
+        self.assertTrue(np.isfinite(losses['reward']))
+        self.assertTrue(np.isfinite(soul.trainer._reward_stats['std']))
+
     def test_action_effect_predictor_is_available(self):
         cfg = Config()
         cfg.model.hidden_dim = 32
