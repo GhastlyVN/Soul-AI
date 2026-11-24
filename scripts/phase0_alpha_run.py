@@ -5,6 +5,7 @@ small and write under ``work/`` so exploratory artifacts do not mix with locked
 results.
 """
 
+from soul.safe_io import write_text_safe
 import argparse
 from datetime import datetime, timezone
 import hashlib
@@ -67,7 +68,7 @@ def run(output_dir: str | Path | None = None, *,
         data_path, checkpoint_path, updates=updates, hidden_dim=hidden_dim,
         latent_dim=latent_dim, seq_len=seq_len, batch_size=batch_size,
         seed=train_seed, device=device)
-    train_report_path.write_text(
+    write_text_safe(train_report_path, 
         json.dumps(train_report, indent=2, ensure_ascii=False, allow_nan=False) + '\n',
         encoding='utf-8')
     print(f'Fit {train_report["updates"]} updates; checkpoint {train_report["checkpoint_sha256"][:12]}.')
@@ -116,7 +117,7 @@ def run(output_dir: str | Path | None = None, *,
             'Cost repetitions are not suitable for latency conclusions at the default.',
         ],
     }
-    manifest_path.write_text(
+    write_text_safe(manifest_path, 
         json.dumps(manifest, indent=2, ensure_ascii=False, allow_nan=False) + '\n',
         encoding='utf-8')
     print(f'Alpha run complete. Manifest: {manifest_path}')

@@ -89,3 +89,7 @@ def open_output(path, *, append=False, binary=False):
     finally:
         if descriptor is not None:
             os.close(descriptor)
+def write_text_safe(path, text, *, encoding='utf-8'):
+    """Write text through a verified handle instead of a path."""
+    with open_output(path, append=False) as stream:
+        stream.write(text)

@@ -1,5 +1,6 @@
 """Distill privileged MiniCraft experts into observation-only tree skills."""
 
+from soul.safe_io import write_text_safe
 import argparse
 from datetime import datetime, timezone
 import hashlib
@@ -118,7 +119,7 @@ def run(output_dir: str | Path, *, train_seeds: list[int], eval_seeds: list[int]
             'tree': tree,
         }
         skill_path = task_dir / 'skill.json'
-        skill_path.write_text(
+        write_text_safe(skill_path, 
             json.dumps(artifact, indent=2, ensure_ascii=False, allow_nan=False) + '\n',
             encoding='utf-8')
         examples_path = task_dir / 'training_examples.npz'
@@ -183,7 +184,7 @@ def run(output_dir: str | Path, *, train_seeds: list[int], eval_seeds: list[int]
             ],
         }
         manifest_path = task_dir / 'manifest.json'
-        manifest_path.write_text(
+        write_text_safe(manifest_path, 
             json.dumps(task_manifest, indent=2, ensure_ascii=False, allow_nan=False) + '\n',
             encoding='utf-8')
         task_results[task] = {
@@ -207,7 +208,7 @@ def run(output_dir: str | Path, *, train_seeds: list[int], eval_seeds: list[int]
         'tasks': task_results,
     }
     aggregate_path = output / 'batch_manifest.json'
-    aggregate_path.write_text(
+    write_text_safe(aggregate_path, 
         json.dumps(aggregate, indent=2, ensure_ascii=False, allow_nan=False) + '\n',
         encoding='utf-8')
     print(f'Distillation batch manifest: {aggregate_path}')
