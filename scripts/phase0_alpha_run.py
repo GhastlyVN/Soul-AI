@@ -74,7 +74,8 @@ def run(output_dir: str | Path | None = None, *,
 
     score_report = score(
         checkpoint_path, score_path, dev_seeds, max_ticks=dev_max_ticks,
-        shuffle_repeats=shuffle_repeats, raw_output=predictions_path)
+        shuffle_repeats=shuffle_repeats, raw_output=predictions_path,
+        expected_checkpoint_sha256=train_report["checkpoint_sha256"])
     print(f'Scored {len(dev_seeds)} dev seeds (exploratory only).')
 
     cost_records = measure(
