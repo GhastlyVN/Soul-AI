@@ -141,7 +141,8 @@ Example pipeline (temporary paths shown):
 ```powershell
 python -m scripts.phase0_collect --output results/phase0_train.jsonl --seed-count 20 --steps-per-seed 300
 python -m scripts.phase0_train --data results/phase0_train.jsonl --checkpoint results/phase0_soul.pt
-python -m scripts.phase0_score --checkpoint results/phase0_soul.pt --output results/phase0_dev_score.json --seed-start 1000 --seed-count 10 --max-ticks 300
+$scoreCheckpointSha = (Get-Content results/phase0_train_report.json -Raw | ConvertFrom-Json).checkpoint_sha256
+python -m scripts.phase0_score --checkpoint results/phase0_soul.pt --checkpoint-sha256 $scoreCheckpointSha --output results/phase0_dev_score.json --seed-start 1000 --seed-count 10 --max-ticks 300
 python -m scripts.phase0_measure_cost --output results/phase0_cost.jsonl --warmup 5 --reps 30 --threads 1
 ```
 
