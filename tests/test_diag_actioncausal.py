@@ -518,7 +518,7 @@ class AblationReportTests(unittest.TestCase):
 
         soul = self._soul([self._episode([1.0, 0.0], [1.0, 0.0])])
 
-        def mismatched(_s, episodes, kind, intervention_seed=0):
+        def mismatched(_s, episodes, kind, intervention_seed=0, **_kwargs):
             indices = [0] if kind == 'real' else [1]
             return [1.0], indices, 1
 
