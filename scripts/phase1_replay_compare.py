@@ -17,6 +17,8 @@ from minicraft import MiniCraftEnv, MiniCraftExpertSkill, MiniCraftSafetyControl
 
 
 TRAIN_MIN, TRAIN_MAX = 0, 999
+MAX_TRACE_BYTES = 8 * 1024 * 1024
+MAX_TRACE_ROWS = 100_000
 
 
 def _jsonable(value):
@@ -32,8 +34,17 @@ def _jsonable(value):
 
 
 def _load_replay(path: Path, task: str) -> tuple[list[int], int]:
-    rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()
-            if line.strip()]
+    rows = []
+    total = 0
+    with path.open('rb') as handle:
+        for line in handle:
+            total += len(line)
+            if total > MAX_TRACE_BYTES:
+                raise ValueError('source skill trace is too large')
+            if len(rows) >= MAX_TRACE_ROWS:
+                raise ValueError('source skill trace has too many rows')
+            if line.strip():
+                rows.append(json.loads(line))
     if not rows:
         raise ValueError('source skill trace is empty')
     seeds = {row.get('seed') for row in rows}
