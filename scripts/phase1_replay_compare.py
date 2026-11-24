@@ -13,6 +13,7 @@ import time
 
 import numpy as np
 
+from soul.safe_io import open_output
 from minicraft import MiniCraftEnv, MiniCraftExpertSkill, MiniCraftSafetyController
 
 
@@ -166,7 +167,7 @@ def run(task: str, source_trace: str | Path, eval_seeds: list[int],
                         if row['controller'] == 'replay']
     skill_rate = sum(skill_successes) / len(skill_successes)
     replay_rate = sum(replay_successes) / len(replay_successes)
-    with trace_path.open('w', encoding='utf-8', newline='\n') as f:
+    with open_output(trace_path, append=False) as f:
         for row in traces:
             f.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + '\n')
 
@@ -194,9 +195,9 @@ def run(task: str, source_trace: str | Path, eval_seeds: list[int],
         ],
     }
     manifest_path = output / 'manifest.json'
-    manifest_path.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False, allow_nan=False) + '\n',
-        encoding='utf-8')
+    with open_output(manifest_path, append=False) as manifest_file:
+        manifest_file.write(json.dumps(
+            manifest, indent=2, ensure_ascii=False, allow_nan=False) + '\n')
     print(f'{task}: candidate={skill_rate:.3f}, replay={replay_rate:.3f}, '
           f'descriptive_A={skill_rate - replay_rate:+.3f}')
     print(f'Comparison manifest: {manifest_path}')

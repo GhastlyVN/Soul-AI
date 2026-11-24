@@ -20,6 +20,7 @@ import numpy as np
 import torch
 
 from soul.config import Config
+from soul.safe_io import open_output
 from soul.soul import Soul
 from wm_api import CostMeter, SoulAdapter
 
@@ -164,7 +165,7 @@ def run(out_path, warmup=5, reps=30, threads=0, interop_threads=0):
         'reason': 'Phase F detector/gate components are not implemented yet.',
     }
     records.extend((deferred, deferred_gate))
-    with path.open('a', encoding='utf-8', newline='\n') as f:
+    with open_output(path, append=True) as f:
         for record in records:
             f.write(json.dumps(record, allow_nan=False) + '\n')
 

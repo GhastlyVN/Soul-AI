@@ -21,6 +21,7 @@ import torch
 
 from minicraft import MiniCraftEnv, MiniCraftSafetyController
 from soul.config import Config
+from soul.safe_io import open_output
 from soul.soul import Soul
 from wm_api.soul_adapter import SoulAdapter
 
@@ -570,12 +571,13 @@ def score(checkpoint: str | Path, output: str | Path, seeds: list[int],
     if raw_path.resolve() == path.resolve():
         raise ValueError('summary and raw prediction outputs must be different files')
     raw_path.parent.mkdir(parents=True, exist_ok=True)
-    with raw_path.open('w', encoding='utf-8', newline='\n') as raw_file:
+    with open_output(raw_path, append=False) as raw_file:
         for row in raw_rows:
             raw_file.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + '\n')
     report['raw_predictions_sha256'] = hashlib.sha256(raw_path.read_bytes()).hexdigest()
-    path.write_text(json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False) + '\n',
-                    encoding='utf-8')
+    with open_output(path, append=False) as report_file:
+        report_file.write(json.dumps(report, indent=2, ensure_ascii=False,
+                                     allow_nan=False) + '\n')
     return report
 
 

@@ -30,11 +30,13 @@ import torch
 
 try:
     from .demo import PendulumEnv
+    from .safe_io import open_output
     from .diag_actioncausal import load_checkpoint_snapshot
     from .soul import Soul
     from .verify import collect_episodes
 except ImportError:  # pragma: no cover - chạy trực tiếp như script
     from demo import PendulumEnv
+    from safe_io import open_output
     from diag_actioncausal import load_checkpoint_snapshot
     from soul import Soul
     from verify import collect_episodes
@@ -269,32 +271,31 @@ def main():
 
     t0 = time.time()
     last_h = None
-    logf = open(log_path, 'a', encoding='utf-8')
-    try:
-        while soul.trainer.updates < args.steps:
-            collect_episodes(soul, 1, env, rng)
-            for _ in range(args.updates_per_collect):
-                soul.learn(force=True)
-                if soul.trainer.updates % args.checkpoint_every == 0:
-                    soul.save(ckpt_path)
-                    print(f'[train] -> {ckpt_path}')
-                if soul.trainer.updates % args.health_every == 0:
-                    h = health(soul)
-                    if h is None:
-                        print('[train] replay chua du du lieu')
-                        continue
-                    el = time.time() - t0
-                    print(f'[train] {soul.trainer.updates:>7} buoc | {el:>7.0f}s '
-                          f'| {fmt(h)}')
-                    logf.write(json.dumps({'step': soul.trainer.updates,
-                                           'elapsed': el, **h}) + '\n')
-                    logf.flush()
-                    last_h = h
-    except KeyboardInterrupt:
-        print('\n[train] Dung. Luu checkpoint...')
-    finally:
-        soul.save(ckpt_path)
-        logf.close()
+    with open_output(log_path, append=True) as logf:
+        try:
+            while soul.trainer.updates < args.steps:
+                collect_episodes(soul, 1, env, rng)
+                for _ in range(args.updates_per_collect):
+                    soul.learn(force=True)
+                    if soul.trainer.updates % args.checkpoint_every == 0:
+                        soul.save(ckpt_path)
+                        print(f'[train] -> {ckpt_path}')
+                    if soul.trainer.updates % args.health_every == 0:
+                        h = health(soul)
+                        if h is None:
+                            print('[train] replay chua du du lieu')
+                            continue
+                        el = time.time() - t0
+                        print(f'[train] {soul.trainer.updates:>7} buoc | {el:>7.0f}s '
+                              f'| {fmt(h)}')
+                        logf.write(json.dumps({'step': soul.trainer.updates,
+                                               'elapsed': el, **h}) + '\n')
+                        logf.flush()
+                        last_h = h
+        except KeyboardInterrupt:
+            print('\n[train] Dung. Luu checkpoint...')
+        finally:
+            soul.save(ckpt_path)
 
     print('-' * 72)
     print(f'[train] Xong {soul.trainer.updates} buoc '
