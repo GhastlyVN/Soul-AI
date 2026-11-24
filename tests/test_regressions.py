@@ -368,5 +368,29 @@ class SoulRegressionTests(unittest.TestCase):
         finally:
             os.remove(path)
 
+    def test_read_npz_accepts_empty_action_table(self):
+        from soul.dataset import read_npz
+
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            np.savez(path, action=np.zeros((0, 3), np.float32))
+            self.assertEqual(read_npz(path, action_dim=3, goal_dim=1), [])
+        finally:
+            os.remove(path)
+
+    def test_read_npz_rejects_multidimensional_observation_field(self):
+        from soul.dataset import read_npz
+
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            np.savez(path, action=np.zeros((2, 3), np.float32),
+                     obs__x=np.zeros((2, 2), np.float32))
+            with self.assertRaisesRegex(ValueError, 'one-dimensional'):
+                read_npz(path, action_dim=3, goal_dim=1)
+        finally:
+            os.remove(path)
+
 if __name__ == '__main__':
     unittest.main()

@@ -154,17 +154,25 @@ def read_npz(path: str, action_dim: int, goal_dim: int) -> List[Dict[str, Any]]:
             f'NPZ action table must have shape (n, {action_dim}), got {act.shape}')
     for k in names:
         if k in ('ep', 'done', 'reward') or k.startswith('obs__'):
-            size = len(np.atleast_1d(z[k]))
+            array = z[k]
+            if array.ndim != 1:
+                raise ValueError(f'NPZ field {k} must be one-dimensional')
+            size = len(array)
             if size != n:
                 raise ValueError(
                     f'NPZ field {k} has {size} rows, expected {n}')
+
+    if n == 0:
+        return []
 
     # Gom cac bien `obs__*` vao mot dict chung.
     fields = {}
     for k in names:
         if k.startswith('obs__'):
-            fields.setdefault(k[len('obs__'):], []).append(
-                np.atleast_1d(z[k]))
+            field = k[len('obs__'):]
+            if field in fields:
+                raise ValueError(f'NPZ observation field is duplicated: {field}')
+            fields[field] = [z[k]]
 
     ep_ids = z['ep'] if 'ep' in names else np.zeros(n, int)
     dones = z['done'] if 'done' in names else np.zeros(n, int)
