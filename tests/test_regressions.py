@@ -463,5 +463,22 @@ class SoulRegressionTests(unittest.TestCase):
                 dataset.read_csv(alias, action_dim=1, goal_dim=0)
             with open(victim, encoding='utf-8') as handle:
                 self.assertEqual(handle.read(), 'ep,done,reward,a0' + chr(10) + '0,0,0.0,0.1' + chr(10))
+    def test_checkpoint_load_caps_bytes_and_refuses_links(self):
+        import soul.soul as soul_module
+
+        with tempfile.TemporaryDirectory() as dirname:
+            path = os.path.join(dirname, 'big.pt')
+            with open(path, 'wb') as handle:
+                handle.write(b'x' * 64)
+            with patch.object(soul_module, 'MAX_CHECKPOINT_BYTES', 8):
+                with self.assertRaisesRegex(ValueError, 'byte limit'):
+                    Soul(Config()).load(path)
+            alias = os.path.join(dirname, 'alias.pt')
+            try:
+                os.symlink(path, alias)
+            except OSError as error:
+                self.skipTest(f'symlink creation is unavailable: {error}')
+            with self.assertRaisesRegex(ValueError, 'regular|opened safely'):
+                Soul(Config()).load(alias)
 if __name__ == '__main__':
     unittest.main()

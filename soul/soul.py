@@ -11,6 +11,7 @@ Checkpoint lưu đủ để phục hồi nguyên trạng: trọng số, schema e
 replay, stats. Nạp lại là tiếp tục ngay từ bước cũ.
 """
 
+import io
 import json
 import math
 from pathlib import Path
@@ -20,14 +21,14 @@ import numpy as np
 import torch
 
 try:
-    from .safe_io import open_output
+    from .safe_io import open_output, read_regular_bytes
     from .config import Config
     from .obs import ObsEncoder
     from .model import SoulModel
     from .memory import Episode, ReplayBuffer, MemoryManager
     from .trainer import Trainer
 except ImportError:  # pragma: no cover - chạy trực tiếp như script
-    from safe_io import open_output
+    from safe_io import open_output, read_regular_bytes
     from config import Config
     from obs import ObsEncoder
     from model import SoulModel
@@ -129,6 +130,8 @@ class SoulBrain:
             return losses
         return self.soul.learn(force=force)
 
+
+MAX_CHECKPOINT_BYTES = 2 * 1024**3
 
 class Soul:
     """Một 'linh hồn' độc lập — chỉ biết quan sát, hành động, học."""
@@ -590,7 +593,8 @@ class Soul:
 
     def load(self, path: str):
         """Nạp checkpoint, phục hồi nguyên trạng."""
-        ckpt = torch.load(path, map_location=self.device, weights_only=False)
+        raw = read_regular_bytes(path, max_bytes=MAX_CHECKPOINT_BYTES, label='checkpoint')
+        ckpt = torch.load(io.BytesIO(raw), map_location=self.device, weights_only=False)
         self.model.load_state_dict(ckpt['model'])
         # Trong so Adam khong tuong thich giua cac phien bien do cau truc
         # nhom tham so doi. Checkpoint cu co MOT nhom, optimizer hien tai
