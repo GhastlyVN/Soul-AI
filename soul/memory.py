@@ -134,8 +134,8 @@ class ArchiveMemory:
     def from_dict(self, payload: Optional[Dict[str, Any]]):
         if not payload:
             return
-        self.events = list(payload.get('events', []))
-        self.skills = list(payload.get('skills', []))
+        self.events = list(payload.get('events', []))[-self.max_events:]
+        self.skills = list(payload.get('skills', []))[-self.max_skills:]
 
     def save(self, path: str):
         import json
@@ -310,7 +310,7 @@ class MemoryManager:
             return
         self.archive.from_dict(payload.get('archive', {}))
         skills = payload.get('skills', [])
-        self.skills.skills = list(skills)
+        self.skills.skills = list(skills)[-self.skills.maxlen:]
 
     def save(self, path: str):
         import json

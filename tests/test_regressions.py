@@ -141,6 +141,29 @@ class SoulRegressionTests(unittest.TestCase):
             if os.path.exists(path):
                 os.remove(path)
 
+    def test_memory_load_respects_capacity(self):
+        from soul.memory import MemoryManager
+
+        mgr = MemoryManager()
+        mgr.archive.max_events = 2
+        mgr.archive.max_skills = 2
+        mgr.skills.maxlen = 2
+        payload = {
+            'archive': {
+                'events': [{'time': i} for i in range(5)],
+                'skills': [{'name': f'a{i}', 'confidence': 1.0}
+                           for i in range(5)],
+            },
+            'skills': [{'name': f's{i}', 'confidence': 1.0}
+                       for i in range(5)],
+        }
+
+        mgr.from_dict(payload)
+
+        self.assertEqual([e['time'] for e in mgr.archive.events], [3, 4])
+        self.assertEqual([s['name'] for s in mgr.archive.skills], ['a3', 'a4'])
+        self.assertEqual([s['name'] for s in mgr.skills.skills], ['s3', 's4'])
+
     def test_skill_confidence_decays_over_time(self):
         from soul.memory import MemoryManager
 
