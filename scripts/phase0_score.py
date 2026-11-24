@@ -157,7 +157,7 @@ def score(checkpoint: str | Path, output: str | Path, seeds: list[int],
     snapshot, checkpoint_sha256 = checkpoint_snapshot(
         checkpoint, expected_checkpoint_sha256)
     try:
-        saved = torch.load(checkpoint, map_location='cpu', weights_only=False)
+        saved = torch.load(snapshot, map_location='cpu', weights_only=False)
         provenance = saved.get('phase0_provenance')
         if not isinstance(provenance, dict) or provenance.get('schema_version') != 1:
             raise ValueError('checkpoint lacks Phase 0 train provenance')
@@ -181,7 +181,7 @@ def score(checkpoint: str | Path, output: str | Path, seeds: list[int],
         if cfg.model.action_dim != 9 or cfg.model.discrete_dim != 9:
             raise ValueError('checkpoint must use MiniCraft nine-way discrete actions')
         cfg.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        soul = Soul(cfg, checkpoint=str(checkpoint))
+        soul = Soul(cfg, checkpoint=str(snapshot))
     
     finally:
         snapshot.unlink(missing_ok=True)
