@@ -629,9 +629,6 @@ class Soul:
         mem = ckpt.get('memory')
         if mem:
             self.memory_manager.from_dict(mem)
-        archive_path = ckpt.get('archive_path')
-        if archive_path and Path(archive_path).exists():
-            self.load_archive(archive_path)
         print(f'[Soul] Loaded checkpoint: steps={self.steps}, updates={self.updates}')
 
     # -----------------------------------------------------------------
