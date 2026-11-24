@@ -540,11 +540,11 @@ class Soul:
         self._prev_action = None
         self._cur_ep = Episode()
 
-    def save(self, path: str):
+    def save(self, path: str, extra: dict | None = None):
         """Lưu checkpoint: trọng số, schema encoder, replay, stats."""
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        torch.save({
+        state = {
             'model': self.model.state_dict(),
             'optimizer': self.trainer.optimizer.state_dict(),
             'enc_schema': self.enc.schema,
@@ -580,7 +580,10 @@ class Soul:
                 'goal': self._goal,
             },
             'memory': self.memory_manager.to_dict(),
-        }, p)
+        }
+        if extra:
+            state.update(extra)
+        torch.save(state, p)
 
     def load(self, path: str):
         """Nạp checkpoint, phục hồi nguyên trạng."""
