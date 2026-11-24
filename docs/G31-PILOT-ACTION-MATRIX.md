@@ -14,6 +14,8 @@ The default report is \`artifacts/g31/pilot_action_matrix_report.json\`. Existin
 
 ## Evidence and safety boundaries
 
+- The report requires a full 40-character code revision. It resolves `--code-commit`, then `GITHUB_SHA`, then `git rev-parse HEAD`; it refuses to write a report when no revision can be identified.
+
 - Reads the pinned \`artifacts/g31/train.jsonl\` and \`artifacts/g31/pilot.jsonl\` snapshots only.
 - Verifies the TRAIN digest against the frozen checkpoint provenance and verifies the exact PILOT digest before evaluation.
 - Loads model weights only after the checkpoint has passed the bounded regular-file and allowlisted-SHA checks. This is an actual evaluation, not package inspection.

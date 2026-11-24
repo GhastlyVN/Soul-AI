@@ -148,6 +148,40 @@ def test_physical_matrix_scores_terminal_target_for_all_six_interventions(monkey
     assert all("pilot-2001" in result["per_episode"][kind] for kind in INTERVENTIONS)
 
 
+
+def test_code_commit_resolution_uses_explicit_environment_or_git_head(monkeypatch):
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+    monkeypatch.setattr(
+        matrix.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout=("a" * 40) + "\\n"),
+    )
+    assert matrix.resolve_code_commit() == "a" * 40
+    assert matrix.resolve_code_commit("B" * 40) == "b" * 40
+
+    monkeypatch.setenv("GITHUB_SHA", "C" * 40)
+    assert matrix.resolve_code_commit() == "c" * 40
+
+
+def test_code_commit_resolution_fails_closed_without_a_full_revision(monkeypatch):
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+    monkeypatch.setattr(
+        matrix.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="short"),
+    )
+    with pytest.raises(ValueError, match="full 40-character"):
+        matrix.resolve_code_commit()
+
+    monkeypatch.setattr(
+        matrix.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError("git")),
+    )
+    with pytest.raises(RuntimeError, match="--code-commit"):
+        matrix.resolve_code_commit()
+
+
 def test_run_writes_paired_provenance_without_reading_confirm_or_test(tmp_path, monkeypatch):
     pilot_rows = make_episode()
     train_rows = [{"episode_seed": 1001}]
@@ -258,6 +292,7 @@ def test_run_writes_paired_provenance_without_reading_confirm_or_test(tmp_path, 
     assert written["training"]["optimizer_updates"] == 0
     assert written["provenance"]["checkpoint_sha256"] == "c" * 64
     assert written["provenance"]["train_sha256"] == "b" * 64
+    assert written["provenance"]["code_commit"] == "d" * 40
     assert written["provenance"]["pilot_sha256"] == "a" * 64
     assert written["episode_order"] == ["pilot-2001"]
     assert written["valid_transitions"] == 1

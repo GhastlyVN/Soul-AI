@@ -9,6 +9,8 @@ import argparse
 import json
 import os
 import platform
+import re
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -307,9 +309,33 @@ def measure_physical_ablation(model, groups, encoder, seed):
     }
 
 
-def run(checkpoint_path=None, report_path=None, seed=0):
+
+def resolve_code_commit(value=None):
+    """Resolve a full Git commit SHA or fail before producing a non-reproducible report."""
+    candidate = value or os.environ.get("GITHUB_SHA")
+    if candidate is None:
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--verify", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise RuntimeError(
+                "could not resolve the code commit; pass --code-commit or run inside a Git checkout"
+            ) from error
+        candidate = result.stdout.strip()
+    if not isinstance(candidate, str) or re.fullmatch(r"[0-9a-fA-F]{40}", candidate) is None:
+        raise ValueError("code commit must be a full 40-character hexadecimal Git SHA")
+    return candidate.lower()
+
+
+def run(checkpoint_path=None, report_path=None, seed=0, code_commit=None):
     """Score the pinned PILOT split without training or touching CONFIRM/TEST."""
     _validate_seed(seed)
+    code_commit = resolve_code_commit(code_commit)
     checkpoint_path = Path(checkpoint_path) if checkpoint_path else DEFAULT_CHECKPOINT_PATH
     report_path = Path(report_path) if report_path else DEFAULT_REPORT_PATH
 
@@ -399,7 +425,7 @@ def run(checkpoint_path=None, report_path=None, seed=0):
             "pilot_path": str(PILOT_PATH),
             "pilot_sha256": pilot_sha256,
             "pilot_rows": len(pilot_rows),
-            "code_commit": os.environ.get("GITHUB_SHA"),
+            "code_commit": code_commit,
         },
         "reproducibility": {
             "seed": seed,
@@ -456,8 +482,9 @@ def main(argv=None):
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT_PATH)
     parser.add_argument("--report", type=Path, default=DEFAULT_REPORT_PATH)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--code-commit", help="full Git commit SHA for reproducible local runs")
     args = parser.parse_args(argv)
-    payload = run(args.checkpoint, args.report, args.seed)
+    payload = run(args.checkpoint, args.report, args.seed, args.code_commit)
     print(json.dumps({
         "report": str(args.report),
         "checkpoint_sha256": payload["provenance"]["checkpoint_sha256"],
