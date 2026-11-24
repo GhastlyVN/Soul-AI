@@ -480,5 +480,17 @@ class SoulRegressionTests(unittest.TestCase):
                 self.skipTest(f'symlink creation is unavailable: {error}')
             with self.assertRaisesRegex(ValueError, 'regular|opened safely'):
                 Soul(Config()).load(alias)
+    def test_bounded_reader_keeps_binary_bytes_on_windows(self):
+        from soul.safe_io import read_regular_bytes
+
+        fd, path = tempfile.mkstemp(suffix='.bin')
+        os.close(fd)
+        try:
+            payload = b'abc' + bytes([0x1A]) + b'def' + b'\r\n' + b'ghi'
+            with open(path, 'wb') as handle:
+                handle.write(payload)
+            self.assertEqual(read_regular_bytes(path, max_bytes=64, label='blob'), payload)
+        finally:
+            os.remove(path)
 if __name__ == '__main__':
     unittest.main()
