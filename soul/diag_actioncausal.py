@@ -543,16 +543,14 @@ def checkpoint_exists_or_training(path, allow_training=False):
     )
 
 
-def load_checkpoint_snapshot(soul, checkpoint_path, expected_sha256=None):
+def load_checkpoint_snapshot(soul, checkpoint_path, expected_sha256):
     """Hash and load one bounded, no-follow disk snapshot of the checkpoint."""
     checkpoint_path = Path(checkpoint_path)
-    expected = None
-    if expected_sha256 is not None:
-        if not isinstance(expected_sha256, str):
-            raise ValueError('expected checkpoint SHA-256 must be a string')
-        expected = expected_sha256.strip().lower()
-        if len(expected) != 64 or any(char not in '0123456789abcdef' for char in expected):
-            raise ValueError('expected checkpoint SHA-256 must be 64 lowercase hexadecimal characters')
+    if not isinstance(expected_sha256, str):
+        raise ValueError('expected checkpoint SHA-256 must be a string')
+    expected = expected_sha256.strip().lower()
+    if len(expected) != 64 or any(char not in '0123456789abcdef' for char in expected):
+        raise ValueError('expected checkpoint SHA-256 must be 64 lowercase hexadecimal characters')
 
     try:
         path_before = checkpoint_path.lstat()
@@ -790,7 +788,7 @@ def main():
         help='refuse training when the diagnostic checkpoint is absent (default)',
     )
     ap.set_defaults(allow_training=False)
-    ap.add_argument('--expected-checkpoint-sha256', help='optional digest required before checkpoint deserialization')
+    ap.add_argument('--expected-checkpoint-sha256', help='digest required before loading an existing checkpoint')
     ap.add_argument(
         '--train-path',
         help='optional TRAIN path hashed for provenance only; not used as scoring input',
@@ -814,6 +812,8 @@ def main():
         raise SystemExit(str(error)) from error
     if not checkpoint_exists and args.expected_checkpoint_sha256:
         raise SystemExit('--expected-checkpoint-sha256 requires an existing checkpoint')
+    if checkpoint_exists and not args.expected_checkpoint_sha256:
+        raise SystemExit('--expected-checkpoint-sha256 is required when loading an existing checkpoint')
 
     checkpoint_sha256 = None
     if checkpoint_exists:

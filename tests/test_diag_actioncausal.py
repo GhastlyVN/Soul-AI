@@ -1,4 +1,5 @@
 import os
+import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from soul.diag_actioncausal import (
     _write_json_report_atomic,
     checkpoint_exists_or_training,
     load_checkpoint_snapshot,
+    main,
     sha256_file,
     intervene_actions,
     measure_ablation,
@@ -30,6 +32,21 @@ class CheckpointBoundaryTests(unittest.TestCase):
         with self.assertRaisesRegex(FileNotFoundError, '--train-if-missing'):
             checkpoint_exists_or_training(missing, allow_training=False)
         self.assertFalse(checkpoint_exists_or_training(missing, allow_training=True))
+
+    def test_existing_checkpoint_requires_a_digest(self):
+        source = Path(tempfile.gettempdir()) / f'soul-action-cli-{os.getpid()}.ckpt'
+        source.write_bytes(b'checkpoint')
+        try:
+            with patch('soul.diag_actioncausal.CKPT', str(source)):
+                with patch('sys.argv', ['prog', '--matrix']):
+                    with patch(
+                        'soul.diag_actioncausal.load_checkpoint_snapshot',
+                        side_effect=AssertionError('must not load an unlisted checkpoint'),
+                    ):
+                        with self.assertRaisesRegex(SystemExit, 'expected-checkpoint-sha256 is required'):
+                            main()
+        finally:
+            source.unlink(missing_ok=True)
 
     def test_checkpoint_snapshot_hashes_the_exact_bytes_loaded(self):
         class CapturingSoul:
@@ -80,7 +97,7 @@ class CheckpointBoundaryTests(unittest.TestCase):
                     raise AssertionError('a linked checkpoint must never be deserialized')
 
             with self.assertRaisesRegex(ValueError, 'regular non-symlink file'):
-                load_checkpoint_snapshot(MustNotLoad(), alias)
+                load_checkpoint_snapshot(MustNotLoad(), alias, expected_sha256='0' * 64)
         finally:
             alias.unlink(missing_ok=True)
             source.unlink(missing_ok=True)
@@ -96,7 +113,7 @@ class CheckpointBoundaryTests(unittest.TestCase):
         try:
             with patch('soul.diag_actioncausal.MAX_CHECKPOINT_BYTES', 4):
                 with self.assertRaisesRegex(ValueError, 'exceeds size limit'):
-                    load_checkpoint_snapshot(MustNotLoad(), source)
+                    load_checkpoint_snapshot(MustNotLoad(), source, expected_sha256='0' * 64)
         finally:
             source.unlink(missing_ok=True)
 
@@ -193,7 +210,7 @@ class CheckpointBoundaryTests(unittest.TestCase):
         try:
             with patch('soul.diag_actioncausal.os.open', side_effect=replace_after_open):
                 with self.assertRaisesRegex(ValueError, 'path changed while it was being opened'):
-                    load_checkpoint_snapshot(MustNotLoad(), source)
+                    load_checkpoint_snapshot(MustNotLoad(), source, expected_sha256='0' * 64)
             self.assertTrue(replaced)
         finally:
             source.unlink(missing_ok=True)
