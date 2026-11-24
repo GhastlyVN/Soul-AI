@@ -1,3 +1,4 @@
+import csv
 import os
 import tempfile
 import unittest
@@ -389,6 +390,45 @@ class SoulRegressionTests(unittest.TestCase):
                      obs__x=np.zeros((2, 2), np.float32))
             with self.assertRaisesRegex(ValueError, 'one-dimensional'):
                 read_npz(path, action_dim=3, goal_dim=1)
+        finally:
+            os.remove(path)
+
+    def test_import_helpers_enforce_byte_and_row_caps(self):
+        import soul.dataset as dataset
+
+        fd, path = tempfile.mkstemp(suffix='.csv')
+        os.close(fd)
+        try:
+            with open(path, 'w', newline='', encoding='utf-8') as handle:
+                writer = csv.writer(handle)
+                writer.writerow(['ep', 'done', 'reward', 'a0', 'x'])
+                for i in range(6):
+                    writer.writerow([0, i == 5, 0.0, 0.1, float(i)])
+
+            with patch.object(dataset, 'MAX_IMPORT_BYTES', 4):
+                with patch('builtins.open', side_effect=AssertionError('must not open')):
+                    with self.assertRaisesRegex(ValueError, 'byte limit'):
+                        dataset.read_csv(path, action_dim=1, goal_dim=0)
+            with patch.object(dataset, 'MAX_IMPORT_ROWS', 3):
+                with self.assertRaisesRegex(ValueError, 'row limit'):
+                    dataset.read_csv(path, action_dim=1, goal_dim=0)
+        finally:
+            os.remove(path)
+
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            np.savez(path, action=np.zeros((6, 1), np.float32),
+                     reward=np.zeros(6, np.float32),
+                     done=np.zeros(6, np.int64), ep=np.zeros(6, np.int64))
+            with patch.object(dataset, 'MAX_IMPORT_BYTES', 4):
+                with patch.object(dataset.np, 'load',
+                                  side_effect=AssertionError('must not load')):
+                    with self.assertRaisesRegex(ValueError, 'byte limit'):
+                        dataset.read_npz(path, action_dim=1, goal_dim=0)
+            with patch.object(dataset, 'MAX_IMPORT_ROWS', 3):
+                with self.assertRaisesRegex(ValueError, 'row limit'):
+                    dataset.read_npz(path, action_dim=1, goal_dim=0)
         finally:
             os.remove(path)
 
