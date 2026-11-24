@@ -13,6 +13,7 @@ def test_workflow_actions_are_pinned_to_commit_shas():
     assert uses
     for line in uses:
         reference = line.split('- uses:', 1)[1].strip().split()[0]
-        owner, name, revision = reference.split('/')
+        owner, repository = reference.split('/', 1)
+        name, revision = repository.split('@', 1)
         assert owner and name
         assert re.fullmatch(r'[0-9a-f]{40}', revision), line
