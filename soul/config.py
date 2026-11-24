@@ -24,6 +24,12 @@ class ObsConfig:
     # chuẩn hóa theo cả phạm vi bài toán để không bị bão hòa sớm.
     time_scale: float = 200.0
 
+    def __post_init__(self):
+        if self.max_features < 1:
+            raise ValueError('max_features must be positive.')
+        if self.text_buckets < 1:
+            raise ValueError('text_buckets must be positive.')
+
 
 @dataclass
 class ModelConfig:
