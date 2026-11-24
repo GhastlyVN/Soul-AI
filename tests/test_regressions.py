@@ -1,7 +1,9 @@
 import csv
+import io
 import os
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
 import numpy as np
@@ -431,6 +433,85 @@ class SoulRegressionTests(unittest.TestCase):
                     dataset.read_npz(path, action_dim=1, goal_dim=0)
         finally:
             os.remove(path)
+
+
+    def test_read_npz_rejects_npy_shape_bomb_before_numpy_load(self):
+        import soul.dataset as dataset
+
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            header = io.BytesIO()
+            np.lib.format.write_array_header_1_0(
+                header,
+                {
+                    'descr': np.dtype(np.float32).str,
+                    'fortran_order': False,
+                    'shape': (10 ** 12,),
+                },
+            )
+            with zipfile.ZipFile(path, 'w') as archive:
+                archive.writestr('action.npy', header.getvalue())
+
+            with patch.object(
+                dataset.np,
+                'load',
+                side_effect=AssertionError('NumPy must not materialize an unbounded shape'),
+            ):
+                with self.assertRaisesRegex(ValueError, 'array exceeds'):
+                    dataset.read_npz(path, action_dim=1, goal_dim=0)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_read_npz_rejects_too_many_entries_before_numpy_load(self):
+        import soul.dataset as dataset
+
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            with zipfile.ZipFile(path, 'w') as archive:
+                archive.writestr('action.npy', b'')
+                archive.writestr('reward.npy', b'')
+
+            with patch.object(dataset, 'MAX_IMPORT_NPZ_ENTRIES', 1):
+                with patch.object(
+                    dataset.np,
+                    'load',
+                    side_effect=AssertionError('NumPy must not open an overfull archive'),
+                ):
+                    with self.assertRaisesRegex(ValueError, 'too many entries'):
+                        dataset.read_npz(path, action_dim=1, goal_dim=0)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_read_npz_uses_the_verified_snapshot_after_path_replacement(self):
+        import soul.dataset as dataset
+
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        replacement = path + '.replacement.npz'
+        try:
+            np.savez(path, action=np.array([[0.25]], np.float32))
+            np.savez(replacement, action=np.array([[0.75]], np.float32))
+            original_load = dataset.np.load
+
+            def replace_then_load(snapshot, *args, **kwargs):
+                self.assertFalse(isinstance(snapshot, (str, bytes, os.PathLike)))
+                os.replace(replacement, path)
+                return original_load(snapshot, *args, **kwargs)
+
+            with patch.object(dataset.np, 'load', side_effect=replace_then_load):
+                episodes = dataset.read_npz(path, action_dim=1, goal_dim=0)
+
+            self.assertAlmostEqual(float(episodes[0]['act'][0][0]), 0.25)
+            replacement_episodes = dataset.read_npz(path, action_dim=1, goal_dim=0)
+            self.assertAlmostEqual(float(replacement_episodes[0]['act'][0][0]), 0.75)
+        finally:
+            for candidate in (path, replacement):
+                if os.path.exists(candidate):
+                    os.remove(candidate)
 
 if __name__ == '__main__':
     unittest.main()
