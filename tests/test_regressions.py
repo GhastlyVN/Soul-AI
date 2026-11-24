@@ -16,6 +16,13 @@ class SoulRegressionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'plan_elite'):
             ModelConfig(plan_elite=0)
 
+    def test_action_columns_keep_their_own_dimension(self):
+        from soul.dataset import _to_action
+
+        action = _to_action({'a1': '0.75'}, action_dim=3)
+        np.testing.assert_allclose(
+            action, np.array([0.0, 0.75, 0.0], dtype=np.float32))
+
     def test_time_feature_keeps_information_across_long_horizon(self):
         enc = ObsEncoder()
         t0 = enc.encode({'time': 0})['values'][enc._schema['time']]

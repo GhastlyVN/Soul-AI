@@ -66,12 +66,6 @@ _META = ('ep', 'done', 'reward', 'goal')
 _ACTION_PREFIX = 'a'
 
 
-def _action_cols(row: Dict[str, str], action_dim: int) -> List[str]:
-    """Tên cột hành động theo thứ tự: `a0`, `a1`, ... theo `action_dim`."""
-    return [f'{_ACTION_PREFIX}{i}' for i in range(action_dim)
-            if f'{_ACTION_PREFIX}{i}' in row]
-
-
 def _to_action(row: Dict[str, str], action_dim: int) -> np.ndarray:
     """Đọc hành động nhiều chiều từ các cột `a0`, `a1`, ...
 
@@ -80,8 +74,8 @@ def _to_action(row: Dict[str, str], action_dim: int) -> np.ndarray:
     van " dung" nen khong ai thay.
     """
     a = np.zeros(action_dim, dtype=np.float32)
-    for i, col in enumerate(_action_cols(row, action_dim)):
-        raw = row.get(col)
+    for i in range(action_dim):
+        raw = row.get(f'{_ACTION_PREFIX}{i}')
         if raw not in (None, ''):
             a[i] = float(raw)
     return a
