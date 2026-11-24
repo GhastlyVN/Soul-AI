@@ -9,9 +9,12 @@ explicitly unavailable.
 import argparse
 import hashlib
 import json
+import os
 import platform
-from pathlib import Path
+import stat
 import subprocess
+import tempfile
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -24,6 +27,90 @@ from wm_api.soul_adapter import SoulAdapter
 
 DEV_MIN, DEV_MAX = 1000, 1999
 HORIZONS = (1, 5, 20, 100)
+
+
+MAX_CHECKPOINT_BYTES = 256 * 1024 * 1024
+
+
+def _checkpoint_identity(metadata):
+    identity = (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
+    if os.name == "nt":
+        return identity
+    return (*identity, metadata.st_ctime_ns)
+
+
+def _checkpoint_is_link(metadata):
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return stat.S_ISLNK(metadata.st_mode) or bool(getattr(metadata, "st_file_attributes", 0) & reparse)
+
+
+def checkpoint_snapshot(path, expected_sha256):
+    """Hash a bounded no-follow snapshot before the checkpoint is deserialized."""
+    if not isinstance(expected_sha256, str):
+        raise ValueError("expected checkpoint SHA-256 must be a string")
+    expected = expected_sha256.strip().lower()
+    if len(expected) != 64 or any(char not in "0123456789abcdef" for char in expected):
+        raise ValueError("expected checkpoint SHA-256 must be 64 hexadecimal characters")
+    path = Path(path)
+    try:
+        before = path.lstat()
+    except OSError as error:
+        raise ValueError(f"checkpoint is unavailable: {path}") from error
+    if _checkpoint_is_link(before) or not stat.S_ISREG(before.st_mode):
+        raise ValueError(f"checkpoint must be a regular non-symlink file: {path}")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ValueError(f"checkpoint could not be opened safely: {path}: {error}") from error
+    snapshot_path = None
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        with os.fdopen(descriptor, "rb") as source:
+            descriptor = None
+            opened = os.fstat(source.fileno())
+            if (_checkpoint_is_link(opened) or not stat.S_ISREG(opened.st_mode)
+                    or _checkpoint_identity(opened) != _checkpoint_identity(before)):
+                raise ValueError("checkpoint changed while it was being opened")
+            after_open = path.lstat()
+            if (_checkpoint_is_link(after_open) or not stat.S_ISREG(after_open.st_mode)
+                    or _checkpoint_identity(after_open) != _checkpoint_identity(opened)):
+                raise ValueError("checkpoint changed while it was being opened")
+            if before.st_size <= 0 or before.st_size > MAX_CHECKPOINT_BYTES:
+                raise ValueError(f"checkpoint exceeds the size limit ({MAX_CHECKPOINT_BYTES} bytes)")
+            with tempfile.NamedTemporaryFile(mode="wb", prefix="soul-phase0-", suffix=".pt", delete=False) as snapshot:
+                snapshot_path = Path(snapshot.name)
+                while True:
+                    chunk = source.read(min(1024 * 1024, MAX_CHECKPOINT_BYTES - total + 1))
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > MAX_CHECKPOINT_BYTES:
+                        raise ValueError("checkpoint exceeds the size limit")
+                    digest.update(chunk)
+                    snapshot.write(chunk)
+            after = os.fstat(source.fileno())
+            path_after = path.lstat()
+            if (total != before.st_size
+                    or _checkpoint_identity(before) != _checkpoint_identity(after)
+                    or _checkpoint_identity(after) != _checkpoint_identity(path_after)
+                    or _checkpoint_is_link(path_after)
+                    or not stat.S_ISREG(path_after.st_mode)):
+                raise ValueError("checkpoint changed while its snapshot was created")
+        actual = digest.hexdigest()
+        if actual != expected:
+            raise ValueError("checkpoint SHA-256 does not match the expected digest")
+        return snapshot_path, actual
+    except Exception:
+        if snapshot_path is not None:
+            snapshot_path.unlink(missing_ok=True)
+        raise
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _feature_group(name: str) -> str:
@@ -49,7 +136,8 @@ def _mean_present(values):
 def score(checkpoint: str | Path, output: str | Path, seeds: list[int],
           episodes_per_seed: int = 1, max_ticks: int = 100,
           shuffle_repeats: int = 5,
-          raw_output: str | Path = 'results/phase0_dev_predictions.jsonl') -> dict:
+          raw_output: str | Path = 'results/phase0_dev_predictions.jsonl',
+          *, expected_checkpoint_sha256: str) -> dict:
     if not seeds or any(isinstance(seed, bool) or not isinstance(seed, (int, np.integer))
                         or not DEV_MIN <= int(seed) <= DEV_MAX
                         for seed in seeds):
@@ -66,31 +154,37 @@ def score(checkpoint: str | Path, output: str | Path, seeds: list[int],
     if len(set(environment_seeds)) != len(environment_seeds):
         raise ValueError('derived episode seeds overlap; choose non-overlapping seed ranges')
 
-    saved = torch.load(checkpoint, map_location='cpu', weights_only=False)
-    provenance = saved.get('phase0_provenance')
-    if not isinstance(provenance, dict) or provenance.get('schema_version') != 1:
-        raise ValueError('checkpoint lacks Phase 0 train provenance')
-    if provenance.get('status') != 'TRAIN_ONLY' or provenance.get('split') != 'train':
-        raise ValueError('checkpoint provenance is not train-only')
-    for key in ('collection_seeds', 'fit_seeds'):
-        values = provenance.get(key)
-        if (not isinstance(values, list) or not values
-                or any(isinstance(value, bool) or not isinstance(value, int)
-                       or not 0 <= value <= 999 for value in values)
-                or values != sorted(set(values))):
-            raise ValueError(f'checkpoint has invalid train-only {key} provenance')
-    if not set(provenance['fit_seeds']).issubset(provenance['collection_seeds']):
-        raise ValueError('checkpoint fit seeds are absent from collection seeds')
-    for key in ('data_sha256', 'protocol_config_sha256'):
-        value = provenance.get(key)
-        if (not isinstance(value, str) or len(value) != 64
-                or any(char not in '0123456789abcdef' for char in value)):
-            raise ValueError(f'checkpoint has invalid {key} provenance')
-    cfg = Config.from_dict(saved['config'])
-    if cfg.model.action_dim != 9 or cfg.model.discrete_dim != 9:
-        raise ValueError('checkpoint must use MiniCraft nine-way discrete actions')
-    cfg.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    soul = Soul(cfg, checkpoint=str(checkpoint))
+    snapshot, checkpoint_sha256 = checkpoint_snapshot(
+        checkpoint, expected_checkpoint_sha256)
+    try:
+        saved = torch.load(snapshot, map_location='cpu', weights_only=False)
+        provenance = saved.get('phase0_provenance')
+        if not isinstance(provenance, dict) or provenance.get('schema_version') != 1:
+            raise ValueError('checkpoint lacks Phase 0 train provenance')
+        if provenance.get('status') != 'TRAIN_ONLY' or provenance.get('split') != 'train':
+            raise ValueError('checkpoint provenance is not train-only')
+        for key in ('collection_seeds', 'fit_seeds'):
+            values = provenance.get(key)
+            if (not isinstance(values, list) or not values
+                    or any(isinstance(value, bool) or not isinstance(value, int)
+                           or not 0 <= value <= 999 for value in values)
+                    or values != sorted(set(values))):
+                raise ValueError(f'checkpoint has invalid train-only {key} provenance')
+        if not set(provenance['fit_seeds']).issubset(provenance['collection_seeds']):
+            raise ValueError('checkpoint fit seeds are absent from collection seeds')
+        for key in ('data_sha256', 'protocol_config_sha256'):
+            value = provenance.get(key)
+            if (not isinstance(value, str) or len(value) != 64
+                    or any(char not in '0123456789abcdef' for char in value)):
+                raise ValueError(f'checkpoint has invalid {key} provenance')
+        cfg = Config.from_dict(saved['config'])
+        if cfg.model.action_dim != 9 or cfg.model.discrete_dim != 9:
+            raise ValueError('checkpoint must use MiniCraft nine-way discrete actions')
+        cfg.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        soul = Soul(cfg, checkpoint=str(snapshot))
+    
+    finally:
+        snapshot.unlink(missing_ok=True)
     adapter = SoulAdapter(soul)
     soul.model.eval()
     if not soul.enc.schema:
@@ -387,7 +481,7 @@ def score(checkpoint: str | Path, output: str | Path, seeds: list[int],
         'kind': 'phase0_dev_score',
         'status': 'EXPLORATORY_NO_THRESHOLDS_LOCKED',
         'checkpoint': str(checkpoint),
-        'checkpoint_sha256': hashlib.sha256(Path(checkpoint).read_bytes()).hexdigest(),
+        'checkpoint_sha256': checkpoint_sha256,
         'feature_schema_sha256': schema_hash,
         'unseen_feature_overflow': int(soul.enc.overflow),
         'unseen_feature_overflow_by_path': dict(sorted(
@@ -488,6 +582,8 @@ def score(checkpoint: str | Path, output: str | Path, seeds: list[int],
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--checkpoint', required=True)
+    parser.add_argument('--checkpoint-sha256', required=True,
+                        help='SHA-256 allowlist entry for --checkpoint')
     parser.add_argument('--output', default='results/phase0_dev_score.json')
     parser.add_argument('--raw-output', default='results/phase0_dev_predictions.jsonl')
     parser.add_argument('--seed-start', type=int, default=1000)
@@ -501,7 +597,8 @@ def main():
         result = score(args.checkpoint, args.output,
                        list(range(args.seed_start, args.seed_start + args.seed_count)),
                        args.episodes_per_seed, args.max_ticks,
-                       raw_output=args.raw_output)
+                       raw_output=args.raw_output,
+                       expected_checkpoint_sha256=args.checkpoint_sha256)
     except ValueError as exc:
         parser.error(str(exc))
     print(json.dumps(result['equal_episode_mean'], indent=2))
