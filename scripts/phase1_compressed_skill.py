@@ -90,7 +90,10 @@ def _parse_json_object(raw: bytes, *, label: str) -> dict:
 
 
 def _read_json_object(path: Path, *, label: str) -> dict:
-    raw = read_regular_bytes(path, max_bytes=MAX_JSON_BYTES, label=label)
+    try:
+        raw = read_regular_bytes(path, max_bytes=MAX_JSON_BYTES, label=label)
+    except ValueError as exc:
+        raise ValueError(f'invalid {label}: {exc}') from exc
     return _parse_json_object(raw, label=label)
 
 
