@@ -28,6 +28,23 @@ class Phase0CheckpointSnapshotTests(unittest.TestCase):
                 checkpoint_snapshot(path, '0' * 64)
 
 
+    def test_score_rejects_unlisted_digest_before_torch_load(self):
+        from unittest.mock import patch
+
+        from scripts.phase0_score import score
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            checkpoint = root / 'soul.pt'
+            checkpoint.write_bytes(b'unlisted checkpoint bytes')
+            with patch('scripts.phase0_score.torch.load',
+                       side_effect=AssertionError('unlisted checkpoint was deserialized')) as load:
+                with self.assertRaisesRegex(ValueError, 'does not match the expected digest'):
+                    score(checkpoint, root / 'score.json', [1000],
+                          raw_output=root / 'raw.jsonl',
+                          expected_checkpoint_sha256='0' * 64)
+            load.assert_not_called()
+
 if __name__ == '__main__':
     unittest.main()
 
