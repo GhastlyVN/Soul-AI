@@ -139,7 +139,11 @@ class ArchiveMemory:
 
     def save(self, path: str):
         import json
-        with open(path, 'w', encoding='utf-8') as f:
+        try:
+            from .safe_io import open_output
+        except ImportError:  # pragma: no cover - run as a script
+            from safe_io import open_output
+        with open_output(path, append=False) as f:
             json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
 
     def load(self, path: str):
@@ -314,7 +318,11 @@ class MemoryManager:
 
     def save(self, path: str):
         import json
-        with open(path, 'w', encoding='utf-8') as f:
+        try:
+            from .safe_io import open_output
+        except ImportError:  # pragma: no cover - run as a script
+            from safe_io import open_output
+        with open_output(path, append=False) as f:
             json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
 
     def load(self, path: str):
