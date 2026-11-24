@@ -178,8 +178,8 @@ def measure_kl_series(s, rng, intervention='real', n_batches=10,
 
 
 def measure_episode_kl_series(s, episodes, intervention='real',
-                              intervention_seed=0):
-    """Measure one KL value per complete replay episode in stable index order."""
+                              intervention_seed=0, with_physical=False):
+    """Measure one KL value per episode, optionally with prior-decoder physical error."""
     if intervention not in INTERVENTIONS:
         raise ValueError(f'unknown action intervention: {intervention!r}')
     device = torch.device(getattr(s, 'device', 'cpu'))
@@ -189,8 +189,10 @@ def measure_episode_kl_series(s, episodes, intervention='real',
         generator.manual_seed(intervention_seed)
 
     values = []
+    physical = []
     episode_indices = []
     valid_transitions = 0
+    decoder = getattr(getattr(s, 'model', None), 'decoder', None) if with_physical else None
     for episode_index, episode in episodes:
         length = episode.length
         if isinstance(length, bool) or not isinstance(length, int) or length <= 0:
@@ -246,12 +248,20 @@ def measure_episode_kl_series(s, episodes, intervention='real',
             kl = _kl_normal(out['prior_mu'], out['prior_lv'],
                             out['post_mu'], out['post_lv']).sum(-1)
             episode_kl = _masked_kl_mean(kl, metric_valid)
+            if decoder is not None:
+                predicted = decoder(out['h_seq'], out['prior_mu'])['obs']
+                physical_dim = getattr(decoder, 'obs_dim', predicted.shape[-1])
+                error = (predicted[..., :physical_dim]
+                         - oi[..., :physical_dim]).pow(2).mean(-1)
+                physical.append(float(_masked_kl_mean(error, metric_valid)))
         values.append(float(episode_kl))
         episode_indices.append(int(episode_index))
         valid_transitions += count
 
     if not values:
         raise ValueError('replay contains no episode with valid action-conditioned transitions')
+    if with_physical:
+        return values, episode_indices, valid_transitions, physical
     return values, episode_indices, valid_transitions
 
 
@@ -286,15 +296,19 @@ def measure_ablation(s, seed, max_episodes=None, interventions=INTERVENTIONS):
         cpu_state = torch.get_rng_state()
         cuda_states = torch.cuda.get_rng_state_all() if cuda_devices else None
         series = {}
+        physical = {}
         episode_indices = None
         valid_transitions = None
         for offset, kind in enumerate(kinds):
             torch.set_rng_state(cpu_state)
             if cuda_states is not None:
                 torch.cuda.set_rng_state_all(cuda_states)
-            values, indices, count = measure_episode_kl_series(
+            measured = measure_episode_kl_series(
                 s, episodes, kind, intervention_seed=seed + 1000 + offset,
+                with_physical=True,
             )
+            values, indices, count = measured[:3]
+            physical_values = measured[3] if len(measured) > 3 else None
             if episode_indices is None:
                 episode_indices = indices
             elif indices != episode_indices:
@@ -309,11 +323,16 @@ def measure_ablation(s, seed, max_episodes=None, interventions=INTERVENTIONS):
                     f'the paired baseline ({count} != {valid_transitions})'
                 )
             series[kind] = values
-    return {
+            if physical_values is not None:
+                physical[kind] = physical_values
+    result = {
         'series': series,
         'episode_indices': episode_indices,
         'valid_transitions': valid_transitions,
     }
+    if physical:
+        result['physical_series'] = physical
+    return result
 
 
 def _stats(values):
@@ -382,11 +401,42 @@ def summarize_ablation(result):
             kind: _stats([value - baseline for value, baseline in zip(values, real)])
             for kind, values in series.items() if kind != 'real'
         }
+
+    physical = result.get('physical_series')
+    physical_summary = None
+    paired_physical = None
+    if physical is not None:
+        if not isinstance(physical, dict) or set(physical) != set(series):
+            raise ValueError('physical_series must cover exactly the intervention series')
+        for kind, values in physical.items():
+            if (
+                not isinstance(values, (list, tuple))
+                or len(values) != len(series[kind])
+                or any(
+                    isinstance(value, (bool, np.bool_))
+                    or not isinstance(value, (int, float, np.integer, np.floating))
+                    or not np.isfinite(value)
+                    for value in values
+                )
+            ):
+                raise ValueError(f'{kind} physical series must match its KL series')
+        physical_summary = {
+            kind: dict(_stats(values), per_episode_physical_error=list(values))
+            for kind, values in physical.items()
+        }
+        if real is not None:
+            paired_physical = {
+                kind: _stats([value - baseline for value, baseline in zip(values, physical['real'])])
+                for kind, values in physical.items() if kind != 'real'
+            }
+
     return {
         'interventions': interventions,
         'paired_effects_vs_real': paired,
         'episode_indices': list(episode_indices),
         'valid_transitions': int(valid_transitions),
+        'physical_interventions': physical_summary,
+        'paired_physical_effects_vs_real': paired_physical,
     }
 
 
@@ -794,6 +844,13 @@ def main():
         for kind, effect in summary['paired_effects_vs_real'].items():
             print(f'  {kind:8s} minus real: {effect["mean"]:+.4f} '
                   f'(median {effect["median"]:+.4f}, dispersion {effect["dispersion"]:.4f})')
+        if summary['physical_interventions']:
+            print('  Prior-decoder physical MSE (lower is closer to the observation):')
+            for kind, stats in summary['physical_interventions'].items():
+                print(f'  {kind:8s}: MSE mean={stats["mean"]:.4f} '
+                      f'dispersion={stats["dispersion"]:.4f}')
+            for kind, effect in summary['paired_physical_effects_vs_real'].items():
+                print(f'  {kind:8s} minus real: {effect["mean"]:+.4f} physical MSE')
         print(f'  valid transitions per measurement: {summary["valid_transitions"]}')
         print('  No threshold or promotion decision is made by this diagnostic.')
         if args.report:
@@ -826,7 +883,7 @@ def main():
                 'limitations': [
                     'The matrix evaluates complete episodes from the checkpoint-embedded replay buffer; it is not the external PILOT split.',
                     'Optional --train-path and --pilot-path values are hashed only; they are not scoring inputs.',
-                    'Physical prediction deltas are not measured by this diagnostic.',
+                    'Physical deltas are prior-decoder MSE on the raw value channels of the same replay episodes; they are not PILOT scores.',
                 ],
             }
             _write_json_report_atomic(
