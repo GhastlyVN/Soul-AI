@@ -153,31 +153,37 @@ def score(checkpoint: str | Path, output: str | Path, seeds: list[int],
     if len(set(environment_seeds)) != len(environment_seeds):
         raise ValueError('derived episode seeds overlap; choose non-overlapping seed ranges')
 
-    saved = torch.load(checkpoint, map_location='cpu', weights_only=False)
-    provenance = saved.get('phase0_provenance')
-    if not isinstance(provenance, dict) or provenance.get('schema_version') != 1:
-        raise ValueError('checkpoint lacks Phase 0 train provenance')
-    if provenance.get('status') != 'TRAIN_ONLY' or provenance.get('split') != 'train':
-        raise ValueError('checkpoint provenance is not train-only')
-    for key in ('collection_seeds', 'fit_seeds'):
-        values = provenance.get(key)
-        if (not isinstance(values, list) or not values
-                or any(isinstance(value, bool) or not isinstance(value, int)
-                       or not 0 <= value <= 999 for value in values)
-                or values != sorted(set(values))):
-            raise ValueError(f'checkpoint has invalid train-only {key} provenance')
-    if not set(provenance['fit_seeds']).issubset(provenance['collection_seeds']):
-        raise ValueError('checkpoint fit seeds are absent from collection seeds')
-    for key in ('data_sha256', 'protocol_config_sha256'):
-        value = provenance.get(key)
-        if (not isinstance(value, str) or len(value) != 64
-                or any(char not in '0123456789abcdef' for char in value)):
-            raise ValueError(f'checkpoint has invalid {key} provenance')
-    cfg = Config.from_dict(saved['config'])
-    if cfg.model.action_dim != 9 or cfg.model.discrete_dim != 9:
-        raise ValueError('checkpoint must use MiniCraft nine-way discrete actions')
-    cfg.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    soul = Soul(cfg, checkpoint=str(checkpoint))
+    snapshot, checkpoint_sha256 = checkpoint_snapshot(
+        checkpoint, expected_checkpoint_sha256)
+    try:
+        saved = torch.load(checkpoint, map_location='cpu', weights_only=False)
+        provenance = saved.get('phase0_provenance')
+        if not isinstance(provenance, dict) or provenance.get('schema_version') != 1:
+            raise ValueError('checkpoint lacks Phase 0 train provenance')
+        if provenance.get('status') != 'TRAIN_ONLY' or provenance.get('split') != 'train':
+            raise ValueError('checkpoint provenance is not train-only')
+        for key in ('collection_seeds', 'fit_seeds'):
+            values = provenance.get(key)
+            if (not isinstance(values, list) or not values
+                    or any(isinstance(value, bool) or not isinstance(value, int)
+                           or not 0 <= value <= 999 for value in values)
+                    or values != sorted(set(values))):
+                raise ValueError(f'checkpoint has invalid train-only {key} provenance')
+        if not set(provenance['fit_seeds']).issubset(provenance['collection_seeds']):
+            raise ValueError('checkpoint fit seeds are absent from collection seeds')
+        for key in ('data_sha256', 'protocol_config_sha256'):
+            value = provenance.get(key)
+            if (not isinstance(value, str) or len(value) != 64
+                    or any(char not in '0123456789abcdef' for char in value)):
+                raise ValueError(f'checkpoint has invalid {key} provenance')
+        cfg = Config.from_dict(saved['config'])
+        if cfg.model.action_dim != 9 or cfg.model.discrete_dim != 9:
+            raise ValueError('checkpoint must use MiniCraft nine-way discrete actions')
+        cfg.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        soul = Soul(cfg, checkpoint=str(checkpoint))
+    
+    finally:
+        snapshot.unlink(missing_ok=True)
     adapter = SoulAdapter(soul)
     soul.model.eval()
     if not soul.enc.schema:
@@ -474,7 +480,7 @@ def score(checkpoint: str | Path, output: str | Path, seeds: list[int],
         'kind': 'phase0_dev_score',
         'status': 'EXPLORATORY_NO_THRESHOLDS_LOCKED',
         'checkpoint': str(checkpoint),
-        'checkpoint_sha256': hashlib.sha256(Path(checkpoint).read_bytes()).hexdigest(),
+        'checkpoint_sha256': checkpoint_sha256,
         'feature_schema_sha256': schema_hash,
         'unseen_feature_overflow': int(soul.enc.overflow),
         'unseen_feature_overflow_by_path': dict(sorted(
@@ -575,6 +581,8 @@ def score(checkpoint: str | Path, output: str | Path, seeds: list[int],
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--checkpoint', required=True)
+    parser.add_argument('--checkpoint-sha256', required=True,
+                        help='SHA-256 allowlist entry for --checkpoint')
     parser.add_argument('--output', default='results/phase0_dev_score.json')
     parser.add_argument('--raw-output', default='results/phase0_dev_predictions.jsonl')
     parser.add_argument('--seed-start', type=int, default=1000)
@@ -588,7 +596,8 @@ def main():
         result = score(args.checkpoint, args.output,
                        list(range(args.seed_start, args.seed_start + args.seed_count)),
                        args.episodes_per_seed, args.max_ticks,
-                       raw_output=args.raw_output)
+                       raw_output=args.raw_output,
+                       expected_checkpoint_sha256=args.checkpoint_sha256)
     except ValueError as exc:
         parser.error(str(exc))
     print(json.dumps(result['equal_episode_mean'], indent=2))
