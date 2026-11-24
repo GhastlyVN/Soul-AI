@@ -92,7 +92,8 @@ def open_output(path, *, append=False, binary=False, newline=None):
 def read_regular_bytes(path, *, max_bytes, label):
     """Read a bounded regular file without following links or blocking on FIFOs."""
     path = Path(path)
-    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    flags = (os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+             | getattr(os, 'O_BINARY', 0))
     try:
         descriptor = os.open(path, flags)
     except OSError as error:
