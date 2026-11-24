@@ -48,6 +48,7 @@ Moi phan giong `obs__` bien se ghep vao mot dict quan sat chung.
 
 import argparse
 import csv
+import io
 import os
 import sys
 import zipfile
@@ -58,9 +59,11 @@ import numpy as np
 try:
     from .memory import Episode, ReplayBuffer
     from .obs import ObsEncoder
+    from .safe_io import read_regular_bytes
 except ImportError:  # pragma: no cover - chạy trực tiếp như script
     from memory import Episode, ReplayBuffer
     from obs import ObsEncoder
+    from safe_io import read_regular_bytes
 
 # Cot dac biet, khong phai la quan sat.
 _META = ('ep', 'done', 'reward', 'goal')
@@ -139,19 +142,16 @@ def _group(rows: List[Dict[str, str]], action_dim: int, goal_dim: int,
 # Doc tep
 # ----------------------------------------------------------------------
 def read_csv(path: str, action_dim: int, goal_dim: int) -> List[Dict[str, Any]]:
-    size = os.path.getsize(path)
-    if size > MAX_IMPORT_BYTES:
-        raise ValueError(f'import file exceeds {MAX_IMPORT_BYTES} byte limit: {size} bytes')
+    raw = read_regular_bytes(path, max_bytes=MAX_IMPORT_BYTES, label='import file')
     rows: List[Dict[str, str]] = []
-    with open(path, newline='', encoding='utf-8') as f:
-        reader = csv.DictReader(f)
-        header = reader.fieldnames
-        if header is None:
-            return []
-        for row in reader:
-            if len(rows) >= MAX_IMPORT_ROWS:
-                raise ValueError(f'import file exceeds {MAX_IMPORT_ROWS} row limit')
-            rows.append(row)
+    reader = csv.DictReader(io.StringIO(raw.decode('utf-8')))
+    header = reader.fieldnames
+    if header is None:
+        return []
+    for row in reader:
+        if len(rows) >= MAX_IMPORT_ROWS:
+            raise ValueError(f'import file exceeds {MAX_IMPORT_ROWS} row limit')
+        rows.append(row)
     return _group(rows, action_dim, goal_dim, list(header))
 
 

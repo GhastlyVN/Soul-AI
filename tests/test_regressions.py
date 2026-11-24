@@ -432,5 +432,36 @@ class SoulRegressionTests(unittest.TestCase):
         finally:
             os.remove(path)
 
+    def test_csv_import_caps_bytes_even_when_size_is_misreported(self):
+        import soul.dataset as dataset
+
+        fd, path = tempfile.mkstemp(suffix='.csv')
+        os.close(fd)
+        try:
+            with open(path, 'w', newline='', encoding='utf-8') as handle:
+                handle.write('ep,done,reward,a0,x' + chr(10))
+                handle.write('0,0,0.0,0.1,' + 'y' * 200 + chr(10))
+            with patch.object(dataset, 'MAX_IMPORT_BYTES', 32), patch.object(dataset.os.path, 'getsize', return_value=0):
+                with self.assertRaisesRegex(ValueError, 'byte limit'):
+                    dataset.read_csv(path, action_dim=1, goal_dim=0)
+        finally:
+            os.remove(path)
+
+    def test_csv_import_refuses_linked_file(self):
+        import soul.dataset as dataset
+
+        with tempfile.TemporaryDirectory() as dirname:
+            victim = os.path.join(dirname, 'victim.csv')
+            with open(victim, 'w', newline='', encoding='utf-8') as handle:
+                handle.write('ep,done,reward,a0' + chr(10) + '0,0,0.0,0.1' + chr(10))
+            alias = os.path.join(dirname, 'alias.csv')
+            try:
+                os.symlink(victim, alias)
+            except OSError as error:
+                self.skipTest(f'symlink creation is unavailable: {error}')
+            with self.assertRaisesRegex(ValueError, 'regular'):
+                dataset.read_csv(alias, action_dim=1, goal_dim=0)
+            with open(victim, encoding='utf-8') as handle:
+                self.assertEqual(handle.read(), 'ep,done,reward,a0' + chr(10) + '0,0,0.0,0.1' + chr(10))
 if __name__ == '__main__':
     unittest.main()
