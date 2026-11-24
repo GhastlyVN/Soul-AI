@@ -30,10 +30,12 @@ import torch
 
 try:
     from .demo import PendulumEnv
+    from .diag_actioncausal import load_checkpoint_snapshot
     from .soul import Soul
     from .verify import collect_episodes
 except ImportError:  # pragma: no cover - chạy trực tiếp như script
     from demo import PendulumEnv
+    from diag_actioncausal import load_checkpoint_snapshot
     from soul import Soul
     from verify import collect_episodes
 
@@ -198,6 +200,8 @@ def main():
     ap.add_argument('--health-every', type=int, default=200)
     ap.add_argument('--log', type=str, default='')
     ap.add_argument('--resume', type=str, default='')
+    ap.add_argument('--resume-sha256', type=str, default='',
+                    help='required SHA-256 of the checkpoint selected by --resume')
     # Si gia de dung
     ap.add_argument('--batch-size', type=int, default=0)
     ap.add_argument('--seq-len', type=int, default=0)
@@ -207,6 +211,9 @@ def main():
     ap.add_argument('--preset', type=str, default='gpu',
                     choices=('gpu', 'local'))
     args = ap.parse_args()
+    if args.resume and not args.resume_sha256:
+        raise SystemExit(
+            '--resume requires --resume-sha256; unlisted checkpoints are not deserialized')
 
     from .config import Config
     cfg = Config()
@@ -240,7 +247,8 @@ def main():
     soul = Soul(cfg)
     env = PendulumEnv()
     if args.resume:
-        soul.load(args.resume)
+        load_checkpoint_snapshot(soul, args.resume,
+                                 expected_sha256=args.resume_sha256)
         print(f'[train] Da nap: {args.resume}')
     soul.cfg.train.replay_capacity = cfg.train.replay_capacity
 

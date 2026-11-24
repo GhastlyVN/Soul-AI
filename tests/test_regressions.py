@@ -349,5 +349,24 @@ class SoulRegressionTests(unittest.TestCase):
         finally:
             if os.path.exists(path):
                 os.remove(path)
+    def test_train_resume_requires_allowlisted_digest(self):
+        from soul import train
+
+        with patch('sys.argv', ['train', '--resume', 'untrusted.pt']):
+            with self.assertRaisesRegex(SystemExit, '--resume requires --resume-sha256'):
+                train.main()
+
+    def test_plan_existing_checkpoint_requires_allowlisted_digest(self):
+        from soul import plan
+
+        fd, path = tempfile.mkstemp(suffix='.ckpt')
+        os.close(fd)
+        try:
+            with patch('sys.argv', ['plan', '--ckpt', path]):
+                with self.assertRaisesRegex(SystemExit, 'requires --ckpt-sha256'):
+                    plan.main()
+        finally:
+            os.remove(path)
+
 if __name__ == '__main__':
     unittest.main()

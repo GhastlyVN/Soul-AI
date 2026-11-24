@@ -31,6 +31,7 @@ import torch
 
 from .config import Config
 from .demo import PendulumEnv
+from .diag_actioncausal import load_checkpoint_snapshot
 from .soul import Soul
 from .verify import collect_episodes
 
@@ -323,9 +324,14 @@ def main():
     ap.add_argument('--iters', type=int, default=3)
     ap.add_argument('--elite', type=int, default=20)
     ap.add_argument('--ckpt', type=str, default='')
+    ap.add_argument('--ckpt-sha256', type=str, default='',
+                    help='required SHA-256 when --ckpt loads an existing checkpoint')
     ap.add_argument('--free-nats', type=float, default=-1.0)
     ap.add_argument('--w-kl', type=float, default=-1.0)
     args = ap.parse_args()
+    if args.ckpt_sha256 and not (args.ckpt and os.path.exists(args.ckpt)):
+        raise SystemExit(
+            '--ckpt-sha256 requires an existing checkpoint selected by --ckpt')
 
     k = PendulumEnv().k
     # Trạng thái đầu GHÉP CẶP: mọi bộ điều khiển cùng tập, cùng thứ tự.
@@ -345,7 +351,12 @@ def main():
             f'w_kl={cfg.train.w_kl})')
     t0 = time.time()
     if args.ckpt and os.path.exists(args.ckpt):
-        soul.load(args.ckpt)
+        if not args.ckpt_sha256:
+            raise SystemExit(
+                'loading an existing --ckpt requires --ckpt-sha256; '
+                'unlisted checkpoints are not deserialized')
+        load_checkpoint_snapshot(soul, args.ckpt,
+                                 expected_sha256=args.ckpt_sha256)
         print(f'  nạp {args.ckpt}')
     else:
         torch.manual_seed(args.seed)
