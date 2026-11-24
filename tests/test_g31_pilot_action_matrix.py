@@ -251,6 +251,7 @@ def test_run_writes_paired_provenance_without_reading_confirm_or_test(tmp_path, 
         "prepare_pilot_episodes",
         lambda *_args, **_kwargs: (groups, episodes),
     )
+    monkeypatch.setattr(matrix, "resolve_code_commit", lambda _value=None: "d" * 40)
 
     fake_result = {
         "series": {kind: [float(index + 1)] for index, kind in enumerate(INTERVENTIONS)},
