@@ -6,6 +6,7 @@ the simulator, access seeds, or make quality claims.
 
 import hashlib
 import json
+import stat
 from pathlib import Path
 import subprocess
 import sys
@@ -47,18 +48,36 @@ def _sha256_file(path: Path) -> set[str]:
     return hashes
 
 
+def _contained_artifact(path: Path) -> Path:
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise FileNotFoundError(f'archived artifact is missing: {path}') from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(f'archived artifact is not a regular file: {path}')
+    resolved = path.resolve()
+    try:
+        resolved.relative_to(ROOT)
+    except ValueError as exc:
+        raise ValueError(f'archived artifact escapes archive root: {path}') from exc
+    return resolved
+
+
 def _artifact_path(raw_path: str | Path) -> Path:
     """Resolve archived paths while preserving the recorded relative layout."""
-    path = ROOT / Path(raw_path)
+    candidate = Path(raw_path)
+    if candidate.is_absolute():
+        raise ValueError('archived artifact path must be relative')
+    normalized = str(raw_path).replace("\\", "/")
+    path = ROOT / candidate
     if path.exists():
-        return path
-    normalized = str(raw_path).replace('\\', '/')
+        return _contained_artifact(path)
     prefix = 'work/phase1_skill_sweeps/skill-sweep-alpha-audit-20261011/'
     if normalized.startswith(prefix):
         archived = ROOT / 'results' / 'phase1_skill_sweep_20261011' / \
             normalized[len(prefix):]
         if archived.exists():
-            return archived
+            return _contained_artifact(archived)
     raise FileNotFoundError(f'archived artifact is missing: {raw_path}')
 
 
