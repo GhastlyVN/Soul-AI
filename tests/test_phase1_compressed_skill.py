@@ -648,3 +648,19 @@ def test_compressed_manifest_validator_rejects_episode_integrated_drift(tmp_path
 
     with pytest.raises(ValueError, match='episode integrated runtime mismatch'):
         validate_manifest(tmp_path)
+def test_compressed_manifest_validator_parses_hashed_skill_bytes(tmp_path, monkeypatch):
+    from scripts import phase1_compressed_skill
+
+    phase1_compressed_skill.run(
+        tmp_path, train_seeds=[20], eval_seeds=[400], max_ticks=2)
+    original = phase1_compressed_skill._read_json_object
+
+    def reopen_guard(path, *, label):
+        if 'skill artifact' in label:
+            raise AssertionError('hashed skill artifact was reopened')
+        return original(path, label=label)
+
+    monkeypatch.setattr(
+        phase1_compressed_skill, '_read_json_object', reopen_guard)
+    phase1_compressed_skill.validate_manifest(tmp_path)
+
