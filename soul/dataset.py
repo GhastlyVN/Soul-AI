@@ -50,6 +50,7 @@ import argparse
 import csv
 import os
 import sys
+import zipfile
 from typing import Any, Dict, List, Sequence
 
 import numpy as np
@@ -64,6 +65,10 @@ except ImportError:  # pragma: no cover - chạy trực tiếp như script
 # Cot dac biet, khong phai la quan sat.
 _META = ('ep', 'done', 'reward', 'goal')
 _ACTION_PREFIX = 'a'
+
+# Untrusted import files must not be materialized before their limits are checked.
+MAX_IMPORT_BYTES = 256 * 1024 * 1024
+MAX_IMPORT_ROWS = 1_000_000
 
 
 def _to_action(row: Dict[str, str], action_dim: int) -> np.ndarray:
@@ -134,14 +139,34 @@ def _group(rows: List[Dict[str, str]], action_dim: int, goal_dim: int,
 # Doc tep
 # ----------------------------------------------------------------------
 def read_csv(path: str, action_dim: int, goal_dim: int) -> List[Dict[str, Any]]:
+    size = os.path.getsize(path)
+    if size > MAX_IMPORT_BYTES:
+        raise ValueError(f'import file exceeds {MAX_IMPORT_BYTES} byte limit: {size} bytes')
+    rows: List[Dict[str, str]] = []
     with open(path, newline='', encoding='utf-8') as f:
-        rows = list(csv.DictReader(f))
-    if not rows:
-        return []
-    return _group(rows, action_dim, goal_dim, list(rows[0].keys()))
+        reader = csv.DictReader(f)
+        header = reader.fieldnames
+        if header is None:
+            return []
+        for row in reader:
+            if len(rows) >= MAX_IMPORT_ROWS:
+                raise ValueError(f'import file exceeds {MAX_IMPORT_ROWS} row limit')
+            rows.append(row)
+    return _group(rows, action_dim, goal_dim, list(header))
+
+
+def _check_npz_limits(path: str) -> None:
+    """Reject a compressed archive whose declared members exceed the import cap."""
+    total = 0
+    with zipfile.ZipFile(path) as archive:
+        for info in archive.infolist():
+            total += info.file_size
+            if total > MAX_IMPORT_BYTES:
+                raise ValueError(f'import file exceeds {MAX_IMPORT_BYTES} byte limit: {total} bytes')
 
 
 def read_npz(path: str, action_dim: int, goal_dim: int) -> List[Dict[str, Any]]:
+    _check_npz_limits(path)
     z = np.load(path, allow_pickle=False)
     names = list(z.keys())
     if 'action' in names or 'act' in names:
@@ -149,6 +174,8 @@ def read_npz(path: str, action_dim: int, goal_dim: int) -> List[Dict[str, Any]]:
     else:
         act = np.zeros((len(z['reward']), action_dim), np.float32)
     n = len(act)
+    if n > MAX_IMPORT_ROWS:
+        raise ValueError(f'import file exceeds {MAX_IMPORT_ROWS} row limit')
     if act.ndim != 2 or act.shape[1] != action_dim:
         raise ValueError(
             f'NPZ action table must have shape (n, {action_dim}), got {act.shape}')
