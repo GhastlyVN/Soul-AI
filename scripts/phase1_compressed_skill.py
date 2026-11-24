@@ -75,16 +75,24 @@ def _reject_duplicate_json_keys(
     return result
 
 
-def _read_json_object(path: Path, *, label: str) -> dict:
+def _parse_json_object(raw: bytes, *, label: str) -> dict:
     try:
         value = json.loads(
-            path.read_text(encoding='utf-8'),
+            raw.decode('utf-8'),
             object_pairs_hook=_reject_duplicate_json_keys)
-    except (OSError, json.JSONDecodeError, ValueError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f'invalid {label}: {exc}') from exc
     if not isinstance(value, dict):
         raise ValueError(f'invalid {label}: root must be an object')
     return value
+
+
+def _read_json_object(path: Path, *, label: str) -> dict:
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f'invalid {label}: {exc}') from exc
+    return _parse_json_object(raw, label=label)
 
 
 def _validate_tree(node: object, *, feature_count: int, label: str) -> dict:
@@ -307,10 +315,11 @@ def validate_manifest(output_dir: str | Path) -> dict:
         skill_path = _resolve_archive_path(
             manifest['skill_path'], output=output, task=task,
             filename='skill.json', label=f'{task} skill artifact')
-        if hashlib.sha256(skill_path.read_bytes()).hexdigest() != manifest.get('skill_sha256'):
+        skill_bytes = skill_path.read_bytes()
+        if hashlib.sha256(skill_bytes).hexdigest() != manifest.get('skill_sha256'):
             raise ValueError(f'{task}: skill artifact hash mismatch')
-        skill_artifact = _read_json_object(
-            skill_path, label=f'{task} skill artifact')
+        skill_artifact = _parse_json_object(
+            skill_bytes, label=f'{task} skill artifact')
         if skill_artifact.get('schema_version') != 1:
             raise ValueError(f'{task}: skill artifact schema mismatch')
         if skill_artifact.get('kind') != (

@@ -52,3 +52,25 @@ def test_cli_timeout_remains_explicit(monkeypatch):
 
     with pytest.raises(RuntimeError, match='execution timed out after 180 seconds'):
         alpha_sanity.check_cli('scripts.phase0_alpha_run')
+def test_artifact_paths_reject_escape_and_absolute(tmp_path, monkeypatch):
+    outside_name = f'{tmp_path.name}-outside.json'
+    outside = tmp_path.parent / outside_name
+    outside.write_text('{}', encoding='utf-8')
+    monkeypatch.setattr(alpha_sanity, 'ROOT', tmp_path)
+
+    with pytest.raises(ValueError, match='must be relative'):
+        alpha_sanity._artifact_path(str(outside))
+    with pytest.raises(ValueError, match='escapes archive root'):
+        alpha_sanity._artifact_path(f'../{outside_name}')
+
+def test_artifact_paths_reject_escape_and_absolute(tmp_path, monkeypatch):
+    outside_name = f'{tmp_path.name}-outside.json'
+    outside = tmp_path.parent / outside_name
+    outside.write_text('{}', encoding='utf-8')
+    monkeypatch.setattr(alpha_sanity, 'ROOT', tmp_path)
+
+    with pytest.raises(ValueError, match='must be relative'):
+        alpha_sanity._artifact_path(str(outside))
+    with pytest.raises(ValueError, match='escapes archive root'):
+        alpha_sanity._artifact_path(f'../{outside_name}')
+
