@@ -89,6 +89,36 @@ def open_output(path, *, append=False, binary=False, newline=None):
     finally:
         if descriptor is not None:
             os.close(descriptor)
+def read_regular_bytes(path, *, max_bytes, label):
+    """Read a bounded regular file without following links or blocking on FIFOs."""
+    path = Path(path)
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ValueError(f'{label} cannot be opened safely: {path}: {error}') from error
+    try:
+        metadata = os.fstat(descriptor)
+        if _is_reparse_point(metadata) or not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(f'{label} must be a regular non-link file: {path}')
+        if metadata.st_size > max_bytes:
+            raise ValueError(
+                f'{label} exceeds the {max_bytes}-byte limit: {path}')
+        chunks = []
+        total = 0
+        while total <= max_bytes:
+            chunk = os.read(descriptor, min(1024 * 1024, max_bytes + 1 - total))
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValueError(
+                    f'{label} exceeds the {max_bytes}-byte limit: {path}')
+            chunks.append(chunk)
+        return b''.join(chunks)
+    finally:
+        os.close(descriptor)
+
 def write_text_safe(path, text, *, encoding='utf-8'):
     """Write text through a verified handle instead of a path."""
     with open_output(path, append=False) as stream:

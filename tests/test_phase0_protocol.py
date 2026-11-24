@@ -112,3 +112,11 @@ def test_validator_rejects_split_usage_leakage(tmp_path, old, new, split):
         match=rf"{split} split allowed_for must be exactly",
     ):
         validate_protocol(protocol, ROOT / "configs" / "seeds.yaml")
+
+def test_deeply_nested_yaml_is_a_validation_error(tmp_path):
+    protocol = tmp_path / 'protocol.yaml'
+    protocol.write_text('[' * 2000 + ']' * 2000, encoding='utf-8')
+    seeds = tmp_path / 'seeds.yaml'
+    seeds.write_text('{}', encoding='utf-8')
+    with pytest.raises(ProtocolValidationError):
+        validate_protocol(protocol, seeds)

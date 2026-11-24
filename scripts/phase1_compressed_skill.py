@@ -1,6 +1,6 @@
 """Run the alpha compressed observation-only skill."""
 
-from soul.safe_io import write_text_safe
+from soul.safe_io import read_regular_bytes, write_text_safe
 import argparse
 from datetime import datetime, timezone
 import hashlib
@@ -22,6 +22,7 @@ from minicraft.runtime import CompressedSkillRuntime
 
 TASKS = ('T_wood', 'T_tools', 'T_iron')
 EXPECTED_STATUS = 'EXPLORATORY_TRAIN_SEEDS_NO_PROMOTION'
+MAX_JSON_BYTES = 8 * 1024 * 1024
 RUNTIME_COMPONENTS = (
     'skill_proposal', 'safety_filter', 'environment_step',
     'expectation_monitor', 'integrated',
@@ -81,7 +82,7 @@ def _parse_json_object(raw: bytes, *, label: str) -> dict:
         value = json.loads(
             raw.decode('utf-8'),
             object_pairs_hook=_reject_duplicate_json_keys)
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as exc:
         raise ValueError(f'invalid {label}: {exc}') from exc
     if not isinstance(value, dict):
         raise ValueError(f'invalid {label}: root must be an object')
@@ -90,8 +91,8 @@ def _parse_json_object(raw: bytes, *, label: str) -> dict:
 
 def _read_json_object(path: Path, *, label: str) -> dict:
     try:
-        raw = path.read_bytes()
-    except OSError as exc:
+        raw = read_regular_bytes(path, max_bytes=MAX_JSON_BYTES, label=label)
+    except ValueError as exc:
         raise ValueError(f'invalid {label}: {exc}') from exc
     return _parse_json_object(raw, label=label)
 
@@ -269,7 +270,9 @@ def validate_manifest(output_dir: str | Path) -> dict:
         manifest_path = _resolve_archive_path(
             entry['manifest_path'], output=output, task=task,
             filename='manifest.json', label=f'{task} task manifest')
-        manifest_bytes = manifest_path.read_bytes()
+        manifest_bytes = read_regular_bytes(
+            manifest_path, max_bytes=MAX_JSON_BYTES,
+            label=f'{task} task manifest')
         if hashlib.sha256(manifest_bytes).hexdigest() != entry.get('manifest_sha256'):
             raise ValueError(f'{task}: task manifest hash mismatch')
         try:
@@ -316,7 +319,9 @@ def validate_manifest(output_dir: str | Path) -> dict:
         skill_path = _resolve_archive_path(
             manifest['skill_path'], output=output, task=task,
             filename='skill.json', label=f'{task} skill artifact')
-        skill_bytes = skill_path.read_bytes()
+        skill_bytes = read_regular_bytes(
+            skill_path, max_bytes=MAX_JSON_BYTES,
+            label=f'{task} skill artifact')
         if hashlib.sha256(skill_bytes).hexdigest() != manifest.get('skill_sha256'):
             raise ValueError(f'{task}: skill artifact hash mismatch')
         skill_artifact = _parse_json_object(

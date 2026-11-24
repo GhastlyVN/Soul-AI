@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from soul import safe_io
-from soul.safe_io import open_output
+from soul.safe_io import read_regular_bytes,  open_output
 
 
 def test_write_output_creates_a_regular_file(tmp_path):
@@ -64,3 +64,22 @@ def test_binary_output_writes_bytes(tmp_path):
     with open_output(target, append=False, binary=True) as stream:
         stream.write(b'bytes')
     assert target.read_bytes() == b'bytes'
+
+def test_read_regular_bytes_caps_the_file(tmp_path):
+    path = tmp_path / 'large.json'
+    path.write_bytes(b'x' * 129)
+    with pytest.raises(ValueError, match='exceeds the 128-byte limit'):
+        read_regular_bytes(path, max_bytes=128, label='input')
+
+
+def test_read_regular_bytes_refuses_links(tmp_path):
+    victim = tmp_path / 'victim.json'
+    victim.write_bytes(b'keep')
+    alias = tmp_path / 'alias.json'
+    try:
+        alias.symlink_to(victim)
+    except OSError as error:
+        pytest.skip(f'symlink creation is unavailable: {error}')
+    with pytest.raises(ValueError):
+        read_regular_bytes(alias, max_bytes=1024, label='input')
+    assert victim.read_bytes() == b'keep'
