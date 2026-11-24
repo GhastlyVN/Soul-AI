@@ -398,11 +398,20 @@ class AblationReportTests(unittest.TestCase):
                     'prior_lv': zeros,
                     'post_mu': conditioned,
                     'post_lv': zeros,
+                    'h_seq': conditioned,
                 }
+
+        class FakeDecoder:
+            obs_dim = 1
+
+            def __call__(self, _h, z):
+                return {'obs': z}
 
         return SimpleNamespace(
             replay=SimpleNamespace(episodes=episodes),
-            model=SimpleNamespace(dynamics=FakeDynamics(), encoder=None),
+            model=SimpleNamespace(
+                dynamics=FakeDynamics(), encoder=None, decoder=FakeDecoder(),
+            ),
             device=torch.device('cpu'),
         )
 
@@ -425,6 +434,44 @@ class AblationReportTests(unittest.TestCase):
         self.assertEqual(zero_count, real_count)
         self.assertTrue(all(value > 0 for value in real))
         self.assertEqual(zero, [0.0, 0.0])
+
+    def test_physical_prediction_error_uses_prior_and_pairs_with_kl(self):
+        class ActionDynamics:
+            def observe_sequence(self, _obs, actions, _encoder, _valid):
+                prior = actions.clone()
+                prior[:, 0] = 0
+                zeros = torch.zeros_like(prior)
+                return {
+                    'prior_mu': prior, 'prior_lv': zeros,
+                    'post_mu': prior, 'post_lv': zeros, 'h_seq': prior,
+                }
+
+        class ActionDecoder:
+            obs_dim = 1
+
+            def __call__(self, _h, z):
+                return {'obs': z}
+
+        episode = self._episode([0.0, 1.0, 0.0], [1.0, 1.0, 0.0])
+        soul = SimpleNamespace(
+            replay=SimpleNamespace(episodes=[episode]),
+            model=SimpleNamespace(
+                dynamics=ActionDynamics(), encoder=None, decoder=ActionDecoder(),
+            ),
+            device=torch.device('cpu'),
+        )
+        result = measure_ablation(soul, seed=1, interventions=('real', 'zero'))
+        summary = summarize_ablation(result)
+
+        self.assertAlmostEqual(
+            summary['physical_interventions']['real']['mean'], 0.0, places=6,
+        )
+        self.assertAlmostEqual(
+            summary['physical_interventions']['zero']['mean'], 1.0, places=6,
+        )
+        self.assertAlmostEqual(
+            summary['paired_physical_effects_vs_real']['zero']['mean'], 1.0, places=6,
+        )
 
     def test_ablation_is_deterministic_and_pairs_episode_order_and_latent_rng(self):
         episodes = [
@@ -471,7 +518,7 @@ class AblationReportTests(unittest.TestCase):
 
         soul = self._soul([self._episode([1.0, 0.0], [1.0, 0.0])])
 
-        def mismatched(_s, episodes, kind, intervention_seed=0):
+        def mismatched(_s, episodes, kind, intervention_seed=0, **_kwargs):
             indices = [0] if kind == 'real' else [1]
             return [1.0], indices, 1
 
