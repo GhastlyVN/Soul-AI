@@ -492,5 +492,23 @@ class SoulRegressionTests(unittest.TestCase):
             self.assertEqual(read_regular_bytes(path, max_bytes=64, label='blob'), payload)
         finally:
             os.remove(path)
+    def test_memory_archive_load_caps_bytes_and_refuses_links(self):
+        import soul.memory as memory_module
+        from soul.memory import ArchiveMemory
+
+        with tempfile.TemporaryDirectory() as dirname:
+            path = os.path.join(dirname, 'archive.json')
+            with open(path, 'wb') as handle:
+                handle.write(b'x' * 64)
+            with patch.object(memory_module, 'MAX_ARCHIVE_BYTES', 8):
+                with self.assertRaisesRegex(ValueError, 'byte limit'):
+                    ArchiveMemory().load(path)
+            alias = os.path.join(dirname, 'alias.json')
+            try:
+                os.symlink(path, alias)
+            except OSError as error:
+                self.skipTest(f'symlink creation is unavailable: {error}')
+            with self.assertRaisesRegex(ValueError, 'regular|opened safely'):
+                ArchiveMemory().load(alias)
 if __name__ == '__main__':
     unittest.main()

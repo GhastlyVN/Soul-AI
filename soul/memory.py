@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
+
 
 class WorkingMemory:
     """Bộ nhớ tạm đang hoạt động: vài bước gần nhất, dùng cho phản ứng ngay."""
@@ -148,9 +150,12 @@ class ArchiveMemory:
 
     def load(self, path: str):
         import json
-        with open(path, 'r', encoding='utf-8') as f:
-            payload = json.load(f)
-        self.from_dict(payload)
+        try:
+            from .safe_io import read_regular_bytes
+        except ImportError:  # pragma: no cover - run as a script
+            from safe_io import read_regular_bytes
+        raw = read_regular_bytes(path, max_bytes=MAX_ARCHIVE_BYTES, label='archive')
+        self.from_dict(json.loads(raw))
 
 
 class MemoryManager:
@@ -327,9 +332,12 @@ class MemoryManager:
 
     def load(self, path: str):
         import json
-        with open(path, 'r', encoding='utf-8') as f:
-            payload = json.load(f)
-        self.from_dict(payload)
+        try:
+            from .safe_io import read_regular_bytes
+        except ImportError:  # pragma: no cover - run as a script
+            from safe_io import read_regular_bytes
+        raw = read_regular_bytes(path, max_bytes=MAX_ARCHIVE_BYTES, label='archive')
+        self.from_dict(json.loads(raw))
 
 
 class Episode:
