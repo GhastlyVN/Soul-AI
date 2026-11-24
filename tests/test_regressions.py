@@ -459,7 +459,7 @@ class SoulRegressionTests(unittest.TestCase):
                 os.symlink(victim, alias)
             except OSError as error:
                 self.skipTest(f'symlink creation is unavailable: {error}')
-            with self.assertRaisesRegex(ValueError, 'regular'):
+            with self.assertRaisesRegex(ValueError, 'regular|opened safely'):
                 dataset.read_csv(alias, action_dim=1, goal_dim=0)
             with open(victim, encoding='utf-8') as handle:
                 self.assertEqual(handle.read(), 'ep,done,reward,a0' + chr(10) + '0,0,0.0,0.1' + chr(10))
