@@ -154,7 +154,7 @@ def test_code_commit_resolution_uses_explicit_environment_or_git_head(monkeypatc
     monkeypatch.setattr(
         matrix.subprocess,
         "run",
-        lambda *_args, **_kwargs: SimpleNamespace(stdout=("a" * 40) + "\\n"),
+        lambda *_args, **_kwargs: SimpleNamespace(stdout=("a" * 40) + "\n"),
     )
     assert matrix.resolve_code_commit() == "a" * 40
     assert matrix.resolve_code_commit("B" * 40) == "b" * 40
