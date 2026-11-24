@@ -15,8 +15,11 @@ class _Encoder:
     overflow = 0
 
     def encode(self, observation):
-        return np.zeros(2, dtype=np.float32)
-
+        return {
+            'values': np.zeros(2, dtype=np.float32),
+            'mask': np.ones(2, dtype=np.float32),
+            'text': np.zeros(1, dtype=np.float32),
+        }
 
 class _Replay:
     def __init__(self):
