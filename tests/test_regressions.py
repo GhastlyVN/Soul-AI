@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -298,5 +299,55 @@ class SoulRegressionTests(unittest.TestCase):
                 os.remove(path)
 
 
+    def test_checkpoint_cannot_select_an_archive_to_load(self):
+        import torch
+
+        cfg = Config()
+        fd, path = tempfile.mkstemp(suffix='.pt')
+        os.close(fd)
+        try:
+            Soul(cfg).save(path)
+            ckpt = torch.load(path, map_location='cpu', weights_only=False)
+            ckpt['archive_path'] = path
+            torch.save(ckpt, path)
+            # The embedded 'memory' is authoritative; a checkpoint must not
+            # name an arbitrary JSON file to load on top of it.
+            with patch.object(
+                Soul, 'load_archive',
+                side_effect=AssertionError('checkpoint-controlled archive path followed'),
+            ):
+                restored = Soul(cfg)
+                restored.load(path)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_read_npz_rejects_wrong_action_width(self):
+        from soul.dataset import read_npz
+
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            np.savez(path, action=np.zeros((2, 2), np.float32),
+                     reward=np.zeros(2, np.float32))
+            with self.assertRaisesRegex(ValueError, 'action table'):
+                read_npz(path, action_dim=3, goal_dim=1)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_read_npz_rejects_short_observation_field(self):
+        from soul.dataset import read_npz
+
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            np.savez(path, action=np.zeros((2, 3), np.float32),
+                     obs__x=np.zeros(1, np.float32))
+            with self.assertRaisesRegex(ValueError, 'obs__x'):
+                read_npz(path, action_dim=3, goal_dim=1)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
 if __name__ == '__main__':
     unittest.main()
