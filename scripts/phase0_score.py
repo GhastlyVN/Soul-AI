@@ -113,7 +113,8 @@ def checkpoint_snapshot(path, expected_sha256):
             os.close(descriptor)
 
 
-def _feature_group(name: str) -> str:    """Map a frozen observation path to its top-level MiniCraft feature group."""
+def _feature_group(name: str) -> str:
+    """Map a frozen observation path to its top-level MiniCraft feature group."""
     if name.startswith('self.'):
         return 'self'
     if name.startswith('inv.'):
