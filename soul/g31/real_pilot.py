@@ -60,7 +60,9 @@ def run_real_pilot():
     for ep in pilot_eps:
         for t in ep:
             pred_persist = np.array(t['raw_observation_before'])
-            pred_delta = np.array(t['raw_observation_before']) + np.array([mean_dx, mean_dv])
+            pred_delta = predict_train_delta(
+                np.array(t['raw_observation_before']), mean_dx, mean_dv
+            )
             target = np.array(t['raw_observation_after'])
             # Model prediction placeholder (would come from frozen RSSM)
             pred_model = pred_delta  # placeholder
