@@ -449,3 +449,111 @@ def test_archive_hash_stops_at_limit_plus_one_byte():
     # The inspector reads only the one byte needed to prove the limit was crossed.
     assert stream.read_sizes == [5]
     assert stream.offset == 5
+
+
+def _reference_package(tmp_path, *, manifest=None, frozen=None, skill=b"{}"):
+    skill_hash = hashlib.sha256(skill).hexdigest()
+    root = "/content/soul-general-training/20261125T130845Z"
+    manifest = manifest or {
+        "schema_version": 1,
+        "kind": "phase1_compressed_skill_task_alpha",
+        "skill_path": f"{root}/compressed_skill/T_wood/skill.json",
+        "skill_sha256": skill_hash,
+    }
+    archive = tmp_path / "package.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("train_minicraft.jsonl", b"data")
+        zf.writestr("compressed_skill/T_wood/skill.json", skill)
+        zf.writestr("compressed_skill/T_wood/manifest.json", json.dumps(manifest))
+        if frozen is not None:
+            zf.writestr("frozen_manifest.json", json.dumps(frozen))
+    return archive, skill_hash
+
+
+def test_accepts_verified_manifest_artifact_references(tmp_path: Path):
+    archive, skill_hash = _reference_package(tmp_path)
+    report = inspect_package(archive)
+    assert report["manifest_references"]["schema_version"] == 1
+    assert report["manifest_references"]["validated"] == 1
+    assert report["manifest_references"]["references"][0]["sha256"] == skill_hash
+
+
+def test_rejects_manifest_hash_mismatch(tmp_path: Path):
+    manifest = {
+        "schema_version": 1,
+        "kind": "phase1_compressed_skill_task_alpha",
+        "skill_path": "/content/run/compressed_skill/T_wood/skill.json",
+        "skill_sha256": "0" * 64,
+    }
+    archive, _ = _reference_package(tmp_path, manifest=manifest)
+    with pytest.raises(ValueError, match="manifest hash mismatch"):
+        inspect_package(archive)
+
+
+@pytest.mark.parametrize("reference", ["../../outside/skill.json", "/outside/skill.json"])
+def test_rejects_manifest_paths_outside_the_package(tmp_path: Path, reference: str):
+    manifest = {
+        "schema_version": 1,
+        "kind": "phase1_compressed_skill_task_alpha",
+        "skill_path": reference,
+        "skill_sha256": "0" * 64,
+    }
+    archive, _ = _reference_package(tmp_path, manifest=manifest)
+    with pytest.raises(ValueError, match="manifest artifact path"):
+        inspect_package(archive)
+
+
+def test_requires_phase1_manifest_hash_reference(tmp_path: Path):
+    manifest = {
+        "schema_version": 1,
+        "kind": "phase1_compressed_skill_task_alpha",
+        "skill_path": "/content/run/compressed_skill/T_wood/skill.json",
+    }
+    archive, _ = _reference_package(tmp_path, manifest=manifest)
+    with pytest.raises(ValueError, match="invalid skill_sha256"):
+        inspect_package(archive)
+
+
+def test_rejects_unknown_phase1_manifest_schema_version(tmp_path: Path):
+    manifest = {
+        "schema_version": 2,
+        "kind": "phase1_compressed_skill_task_alpha",
+        "skill_path": "/content/run/compressed_skill/T_wood/skill.json",
+        "skill_sha256": "0" * 64,
+    }
+    archive, _ = _reference_package(tmp_path, manifest=manifest)
+    with pytest.raises(ValueError, match="unsupported manifest schema_version"):
+        inspect_package(archive)
+
+
+def test_rejects_frozen_manifest_dataset_hash_mismatch(tmp_path: Path):
+    frozen = {
+        "schema_version": 1,
+        "status": "FROZEN_BEFORE_FINAL_EXAM",
+        "dataset_sha256": "0" * 64,
+    }
+    archive, _ = _reference_package(tmp_path, frozen=frozen)
+    with pytest.raises(ValueError, match="manifest hash mismatch: frozen_manifest.json dataset_sha256"):
+        inspect_package(archive)
+
+
+def test_rejects_report_checkpoint_hash_mismatch(tmp_path: Path):
+    archive, _ = _reference_package(tmp_path)
+    with zipfile.ZipFile(archive, "a") as zf:
+        zf.writestr("validation_dev.json", json.dumps({
+            "schema_version": 2, "kind": "phase0_dev_score", "checkpoint_sha256": "0" * 64,
+        }))
+    with pytest.raises(ValueError, match="manifest hash mismatch: validation_dev.json checkpoint_sha256"):
+        inspect_package(archive)
+
+
+def test_rejects_non_hex_manifest_sha256(tmp_path: Path):
+    manifest = {
+        "schema_version": 1,
+        "kind": "phase1_compressed_skill_task_alpha",
+        "skill_path": "/content/run/compressed_skill/T_wood/skill.json",
+        "skill_sha256": "not-a-hash",
+    }
+    archive, _ = _reference_package(tmp_path, manifest=manifest)
+    with pytest.raises(ValueError, match="invalid skill_sha256"):
+        inspect_package(archive)
