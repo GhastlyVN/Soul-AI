@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath
 import stat
 import tempfile
@@ -29,6 +30,33 @@ MAX_PATH_COMPONENTS = 64
 MAX_COMPONENT_UTF8_BYTES = 255
 MAX_COMPONENT_UTF16_UNITS = 255
 CHUNK_SIZE = 1024 * 1024
+MANIFEST_SCHEMA_VERSION = 1
+# schema_version 1 package manifests, pinned to the artifact layout emitted by the
+# audited training notebook. Hash-only fields resolve to these packaged files.
+CANONICAL_HASH_REFERENCES = {
+    "dataset_sha256": "train_minicraft.jsonl",
+    "checkpoint_sha256": "soul_rssm_trained.pt",
+    "memory_archive_sha256": "memory_manager.json",
+    "compressed_skill_manifest_sha256": "compressed_skill/manifest.json",
+    "mapped_skill_manifest_sha256": "mapped_skill/manifest.json",
+}
+# Required reference fields for each known phase1 manifest kind. Absolute paths
+# in these manifests are matched by suffix against packaged files, never opened.
+PHASE1_REFERENCES = {
+    "phase1_compressed_skill_alpha": {
+        "container": "tasks", "path": "manifest_path", "hash": "manifest_sha256",
+    },
+    "phase1_compressed_skill_task_alpha": {
+        "path": "skill_path", "hash": "skill_sha256",
+    },
+    "phase1_observation_mapped_skill_smoke": {
+        "container": "tasks", "path": "manifest_path", "hash": None,
+    },
+    "phase1_observation_mapped_skill_task_smoke": {
+        "path": "trace_path", "hash": "trace_sha256",
+    },
+}
+_SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 
 WINDOWS_RESERVED_NAMES = {
     "CON", "PRN", "AUX", "NUL", "CLOCK$", "CONIN$", "CONOUT$",
@@ -67,6 +95,103 @@ def _collision_key(value: str) -> str:
     normalized = unicodedata.normalize("NFC", value)
     return unicodedata.normalize("NFC", normalized.casefold())
 
+
+def _resolve_package_reference(value, packaged_hashes):
+    """Resolve a manifest artifact reference to exactly one packaged file."""
+    if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
+        raise ValueError(f"invalid manifest artifact path: {value!r}")
+    parts = PurePosixPath(value).parts
+    if ".." in parts or "." in parts:
+        raise ValueError(f"unsafe manifest artifact path: {value}")
+    if value.startswith("/"):
+        # The run directory from the training container is untrusted decoration:
+        # only the suffix that names a packaged file carries meaning here.
+        candidates = [
+            "/".join(parts[index:])
+            for index in range(len(parts))
+            if parts[index] != "/"
+        ]
+        matches = [candidate for candidate in candidates if candidate in packaged_hashes]
+    else:
+        matches = [value] if value in packaged_hashes else []
+    if len(matches) != 1:
+        raise ValueError(
+            f"manifest artifact path does not resolve to exactly one packaged file: {value}"
+        )
+    return matches[0]
+
+
+def _validate_manifest_references(json_documents, packaged_hashes):
+    """Verify manifest-to-file hash references against the hashed inventory."""
+    checked = []
+
+    def check(manifest, field, reference, hash_field, expected):
+        target = _resolve_package_reference(reference, packaged_hashes)
+        if expected is not None:
+            if not isinstance(expected, str) or _SHA256_RE.fullmatch(expected) is None:
+                raise ValueError(f"invalid sha256 reference in {manifest}: {hash_field}")
+            if packaged_hashes[target] != expected:
+                raise ValueError(
+                    f"manifest hash mismatch: {manifest} {hash_field} does not match {target}"
+                )
+        checked.append({
+            "manifest": manifest, "field": field, "path": target, "sha256": expected,
+        })
+
+    for name in sorted(json_documents):
+        document = json_documents[name]
+        if not isinstance(document, dict):
+            continue
+        reference = PHASE1_REFERENCES.get(document.get("kind"))
+        if reference is None:
+            continue
+        if document.get("schema_version") != MANIFEST_SCHEMA_VERSION:
+            raise ValueError(f"unsupported manifest schema_version in {name}")
+        if "container" in reference:
+            entries = document.get(reference["container"])
+            if not isinstance(entries, dict) or not entries:
+                raise ValueError(f"missing manifest reference container in {name}: {reference['container']}")
+            entries = list(entries.values())
+        else:
+            entries = [document]
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get(reference["path"]), str):
+                raise ValueError(f"missing {reference['path']} in {name}")
+            hash_field = reference["hash"]
+            if hash_field is not None:
+                expected = entry.get(hash_field)
+                if not isinstance(expected, str) or _SHA256_RE.fullmatch(expected) is None:
+                    raise ValueError(f"invalid {hash_field} in {name}")
+
+    for name, document in sorted(json_documents.items()):
+        if not isinstance(document, dict):
+            continue
+        for field, target in CANONICAL_HASH_REFERENCES.items():
+            expected = document.get(field)
+            if expected is None or field[:-7] + "_path" in document:
+                continue  # a paired path reference is checked in the walk below
+            if not isinstance(expected, str) or _SHA256_RE.fullmatch(expected) is None:
+                raise ValueError(f"invalid {field} in {name}")
+            if packaged_hashes.get(target) != expected:
+                raise ValueError(f"manifest hash mismatch: {name} {field} does not match {target}")
+            checked.append({
+                "manifest": name, "field": field, "path": target, "sha256": expected,
+            })
+
+    def walk(document, name):
+        if isinstance(document, dict):
+            for key, value in document.items():
+                if key.endswith("_path") and isinstance(value, str):
+                    hash_field = key[:-5] + "_sha256"
+                    check(name, key, value, hash_field, document.get(hash_field))
+                walk(value, name)
+        elif isinstance(document, list):
+            for value in document:
+                walk(value, name)
+
+    for name, document in sorted(json_documents.items()):
+        walk(document, name)
+    return checked
 
 def _validate_name(info: zipfile.ZipInfo) -> tuple[str, bool]:
     raw = info.filename.replace(chr(92), "/")
@@ -249,6 +374,7 @@ def inspect_package(archive_path: Path) -> dict[str, object]:
         snapshot.seek(0)
 
         inventory: list[dict[str, object]] = []
+        json_documents: dict[str, object] = {}
         seen: set[str] = set()
         seen_folded: set[str] = set()
         files_folded: set[str] = set()
@@ -348,7 +474,9 @@ def inspect_package(archive_path: Path) -> dict[str, object]:
                     raise ValueError(f"ZIP member size mismatch: {name}")
                 if json_bytes is not None:
                     try:
-                        json.loads(bytes(json_bytes), object_pairs_hook=_reject_duplicate_keys)
+                        json_documents[name] = json.loads(
+                            bytes(json_bytes), object_pairs_hook=_reject_duplicate_keys
+                        )
                     except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError) as error:
                         raise ValueError(f"invalid JSON file {name}: {error}") from error
                 inventory.append({
@@ -372,6 +500,10 @@ def inspect_package(archive_path: Path) -> dict[str, object]:
         ):
             raise ValueError("ZIP archive changed during inspection")
 
+    packaged_hashes = {
+        item["path"]: item["sha256"] for item in inventory if item["kind"] == "file"
+    }
+    references = _validate_manifest_references(json_documents, packaged_hashes)
     files = [item for item in inventory if item["kind"] == "file"]
     return {
         "schema_version": 1,
@@ -384,10 +516,16 @@ def inspect_package(archive_path: Path) -> dict[str, object]:
             "uncompressed_bytes": total_uncompressed,
         },
         "inventory": inventory,
+        "manifest_references": {
+            "schema_version": MANIFEST_SCHEMA_VERSION,
+            "validated": len(references),
+            "references": references,
+        },
         "limitations": [
             "Model weights and NumPy archives are hashed but never loaded or deserialized.",
-            "JSON syntax and duplicate keys are checked; package-specific manifest hash references are not interpreted.",
-            "This inventory does not reproduce training metrics or establish model safety.",
+            "JSON syntax, duplicate keys, and schema_version 1 manifest hash references are verified; training metrics are not reproduced.",
+            "Absolute artifact paths are matched by suffix against packaged files and are never opened as filesystem paths.",
+            "This inventory does not establish model safety.",
         ],
     }
 
