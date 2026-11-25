@@ -51,3 +51,7 @@ def test_general_training_notebook_fails_closed_at_checkout_and_checkpoint_bound
     checkpoint = sources[9]
     assert checkpoint.index("checkpoint_snapshot(") < checkpoint.index("torch.load(")
     assert "checkpoint_snapshot_path.unlink(missing_ok=True)" in checkpoint
+
+    memory = sources[9]
+    assert "serialized_sha256_before" in memory
+    assert "serialized_sha256_after" in memory
