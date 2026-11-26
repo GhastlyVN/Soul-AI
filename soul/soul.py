@@ -593,6 +593,8 @@ class Soul:
                 'episodes': self.replay.episodes,
                 'capacity': self.replay.capacity,
                 'seq_len': self.replay.seq_len,
+                # Episode dang do chua vao replay van co that trong queue.
+                'current': self._cur_ep,
             },
             'config': self.cfg.to_dict(),
             'stats': {
@@ -648,6 +650,10 @@ class Soul:
         r = ckpt['replay']
         self.replay = ReplayBuffer(r['capacity'], r['seq_len'])
         self.replay.episodes = r['episodes']
+        # `_total` la bo dem RIENG, khong duoc luu. khong tinh lai thi
+        # resume xong replay.size = 0 va capacity khong cat ep cu.
+        self.replay._total = sum(len(e) for e in self.replay.episodes)
+        self._cur_ep = r.get('current') or Episode()
         s = ckpt['stats']
         self.steps = s['steps']
         self.updates = s['updates']
