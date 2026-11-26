@@ -847,3 +847,28 @@ class RewardStatsGuardTests(unittest.TestCase):
         losses = soul.trainer.update(batch)
         self.assertLess(losses['reward'], 20.0)
         self.assertTrue(np.isfinite(losses['total']))
+class CemActionShapeTests(unittest.TestCase):
+    def test_cem_handles_discrete_and_mixed_actions(self):
+        import torch
+        from soul.plan import cem_first_action
+
+        for action_dim, discrete_dim in ((3, 3), (4, 2)):
+            with self.subTest(action_dim=action_dim, discrete_dim=discrete_dim):
+                cfg = Config()
+                cfg.model.hidden_dim = 8
+                cfg.model.latent_dim = 4
+                cfg.model.action_dim = action_dim
+                cfg.model.discrete_dim = discrete_dim
+                cfg.train.batch_size = 2
+                cfg.train.seq_len = 2
+                soul = Soul(cfg)
+
+                action = cem_first_action(
+                    soul,
+                    torch.zeros(1, cfg.model.hidden_dim),
+                    torch.zeros(1, cfg.model.latent_dim),
+                    horizon=2, iters=1, pop=4, elite=2,
+                    act_lo=-1.0, act_hi=1.0)
+
+                self.assertEqual(tuple(action.shape), (1, action_dim))
+                self.assertTrue(bool(torch.isfinite(action).all()))
