@@ -241,8 +241,11 @@ def cem_first_action(soul, h, z, horizon, iters, pop, elite, act_lo, act_hi):
             continuous_dim = (
                 candidate.shape[-1] - soul.cfg.model.discrete_dim)
             candidate[..., :continuous_dim].clamp_(-1.0, 1.0)
-            hh, m_, _ = soul.model.dynamics.step(hh, zz, candidate)
-            zz = m_
+            hh, _, _ = soul.model.dynamics.step(hh, zz, candidate)
+            # Score the same post-action latent that plan_action scores:
+            # the prior's next latent is not the state the action-effect
+            # head was trained to predict.
+            zz = zz + soul.model.action_effect_head(hh, zz, candidate)
             tot = tot + gamma ** t * soul.model.reward_head(hh, zz).squeeze(-1)
         idx = torch.topk(tot, elite).indices
         el = cand[idx]

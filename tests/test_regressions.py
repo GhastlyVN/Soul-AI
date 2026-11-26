@@ -748,3 +748,34 @@ class ImagineContinueAlignmentTests(unittest.TestCase):
         self.assertGreater(len(seen_r), 0)
         for reward_h, cont_h in zip(seen_r, seen_c):
             np.testing.assert_allclose(reward_h.numpy(), cont_h.numpy(), rtol=1e-6)
+class CemActionEffectTests(unittest.TestCase):
+    def test_cem_scores_the_action_effect_state(self):
+        import torch
+        from soul.plan import cem_first_action
+
+        cfg = Config()
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 1
+        cfg.model.discrete_dim = 0
+        cfg.train.batch_size = 2
+        cfg.train.seq_len = 4
+        soul = Soul(cfg)
+
+        h = torch.zeros(1, cfg.model.hidden_dim)
+        z = torch.zeros(1, cfg.model.latent_dim)
+        seen = []
+        original = soul.model.action_effect_head.forward
+
+        def spy(hidden, latent, action):
+            seen.append(tuple(x.shape for x in (hidden, latent, action)))
+            return original(hidden, latent, action)
+
+        soul.model.action_effect_head.forward = spy
+        action = cem_first_action(
+            soul, h, z, horizon=2, iters=1, pop=4, elite=2,
+            act_lo=-1.0, act_hi=1.0)
+
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(seen[0], ((4, 8), (4, 4), (4, 1, 1)))
+        self.assertEqual(tuple(action.shape), (1, 1))
