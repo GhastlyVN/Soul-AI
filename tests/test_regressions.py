@@ -689,3 +689,46 @@ class PlanningSkillTests(unittest.TestCase):
         np.testing.assert_allclose(
             blended, 0.7 * base + 0.3 * np.ones(1, dtype=np.float32), rtol=1e-6)
         np.testing.assert_allclose(soul._prev_action, blended, rtol=1e-6)
+
+
+class ImagineContinueAlignmentTests(unittest.TestCase):
+    def test_continue_gate_uses_the_post_action_state(self):
+        import torch
+        from soul.imagine import imagine_actor_critic
+
+        cfg = Config()
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 1
+        cfg.model.discrete_dim = 0
+        cfg.model.goal_dim = 2
+        cfg.train.imagine_horizon = 3
+        soul = Soul(cfg)
+        h0 = torch.zeros(1, cfg.model.hidden_dim)
+        z0 = torch.zeros(1, cfg.model.latent_dim)
+        goal = torch.zeros(1, cfg.model.goal_dim)
+
+        seen_r, seen_c = [], []
+        orig_r = soul.model.reward_head.forward
+        orig_c = soul.model.continue_head.forward
+
+        def spy_r(hidden, latent):
+            seen_r.append(hidden.detach().clone())
+            return orig_r(hidden, latent)
+
+        def spy_c(hidden, latent):
+            seen_c.append(hidden.detach().clone())
+            return orig_c(hidden, latent)
+
+        soul.model.reward_head.forward = spy_r
+        soul.model.continue_head.forward = spy_c
+        imagine_actor_critic(
+            soul.model, h0, z0, goal, soul.model.reward_head,
+            soul.model.continue_head, soul.model.value_head,
+            soul.model.policy_head, soul.cfg.train.gamma,
+            getattr(soul.cfg.train, 'lam', 0.95), soul.cfg.train.imagine_horizon)
+
+        self.assertEqual(len(seen_r), len(seen_c))
+        self.assertGreater(len(seen_r), 0)
+        for reward_h, cont_h in zip(seen_r, seen_c):
+            np.testing.assert_allclose(reward_h.numpy(), cont_h.numpy(), rtol=1e-6)

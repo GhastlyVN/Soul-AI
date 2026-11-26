@@ -130,10 +130,11 @@ def imagine_actor_critic(model, h0: torch.Tensor, z0: torch.Tensor,
         vs.append(value_head(hs[t].detach(), zs[t].detach(),
                              goal).squeeze(-1))
         # Chuoi con hay da ket thuc — dung de cat chieu chiết khấu.
-        # Do tren TRANG THAI TRUOC khi hanh dong, cung quy uoc voi
-        # `continue_head(h_seq, z_seq)` trong trainer.
+        # Phai do tren TRANG THAI SAU hanh dong, vi trainer hoc continue
+        # tren `h_seq[t]` (trang thai do `actions[t]` sinh ra). Dung `hs[t]`
+        # o day lech mot buoc so voi phan thuong `rts[t]`.
         cont.append(torch.sigmoid(
-            continue_head(hs[t], zs[t]).squeeze(-1)).detach())
+            continue_head(h, z).squeeze(-1)).detach())
 
     hs = torch.stack(hs, 1)
     zs = torch.stack(zs, 1)
