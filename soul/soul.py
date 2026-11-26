@@ -285,6 +285,11 @@ class Soul:
 
             if best_action is None:
                 best_action = np.zeros(self.cfg.model.action_dim, dtype=np.float32)
+            # Planning is the default action path, so without this the
+            # recalled skill only ever biases the rarely used direct path.
+            skill_action = self.recall_skill_action(observation)
+            if skill_action is not None:
+                best_action = (0.7 * best_action + 0.3 * skill_action).astype(np.float32)
             self._prev_action = best_action
             return best_action
 
