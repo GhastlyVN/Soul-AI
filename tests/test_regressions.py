@@ -1045,3 +1045,24 @@ class CheckpointReplayStateTests(unittest.TestCase):
         loaded.replay.add_episode(episode(5))
         self.assertEqual(len(loaded.replay.episodes), 2)
         self.assertEqual(loaded.replay.size, 8)
+
+class EvalStateTests(unittest.TestCase):
+    def test_evaluation_does_not_advance_the_global_step_counter(self):
+        from soul.eval import _evaluate_soul
+
+        cfg = Config()
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 1
+        cfg.model.discrete_dim = 0
+        cfg.model.goal_dim = 4
+        cfg.model.plan_samples = 0
+        cfg.train.batch_size = 2
+        cfg.train.seq_len = 2
+        soul = Soul(cfg)
+        soul.steps = 7
+
+        result = _evaluate_soul(soul, seed=0, episodes=1, steps=3)
+
+        self.assertIn('deterministic', result)
+        self.assertEqual(soul.steps, 7)
