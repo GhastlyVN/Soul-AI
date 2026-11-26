@@ -217,6 +217,18 @@ class Soul:
             arr = arr[:self.cfg.model.action_dim]
         return arr.astype(np.float32)
 
+    def _blend_skill_action(self, action: np.ndarray,
+                            skill_action: np.ndarray) -> np.ndarray:
+        """Bias hanh dong bang skill nhung giu one-hot phan roi rac."""
+        blended = (0.7 * np.asarray(action, dtype=np.float32).reshape(-1)
+                   + 0.3 * np.asarray(skill_action, dtype=np.float32).reshape(-1))
+        cont = int(self.cfg.model.action_dim) - int(self.cfg.model.discrete_dim)
+        if self.cfg.model.discrete_dim:
+            idx = int(np.argmax(blended[cont:]))
+            blended[cont:] = 0.0
+            blended[cont + idx] = 1.0
+        return blended.astype(np.float32)
+
     def plan_action(self, observation: Any, n_samples: Optional[int] = None,
                    deterministic: bool = False) -> np.ndarray:
         """Lập kế hoạch với một vài hành động giả định, rồi chọn cái có
@@ -293,7 +305,7 @@ class Soul:
             # recalled skill only ever biases the rarely used direct path.
             skill_action = self.recall_skill_action(observation)
             if skill_action is not None:
-                best_action = (0.7 * best_action + 0.3 * skill_action).astype(np.float32)
+                best_action = self._blend_skill_action(best_action, skill_action)
             self._prev_action = best_action
             return best_action
 
@@ -359,7 +371,7 @@ class Soul:
 
         skill_action = self.recall_skill_action(observation)
         if skill_action is not None:
-            action = 0.7 * np.asarray(action, dtype=np.float32) + 0.3 * skill_action
+            action = self._blend_skill_action(action, skill_action)
 
         self._h = h
         self._z = z

@@ -1066,3 +1066,27 @@ class EvalStateTests(unittest.TestCase):
 
         self.assertIn('deterministic', result)
         self.assertEqual(soul.steps, 7)
+
+class DiscreteSkillBlendTests(unittest.TestCase):
+    def test_skill_bias_keeps_discrete_actions_one_hot(self):
+        import torch
+
+        cfg = Config()
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 3
+        cfg.model.discrete_dim = 3
+        cfg.model.goal_dim = 2
+        cfg.model.plan_samples = 0
+        cfg.train.batch_size = 2
+        cfg.train.seq_len = 2
+        soul = Soul(cfg)
+        soul.model.policy_head.sample = (
+            lambda mean, logstd, logits, deterministic=False:
+            torch.tensor([[0.0, 1.0, 0.0]]))
+        soul.recall_skill_action = (
+            lambda observation: np.full(3, 0.5, np.float32))
+
+        action = soul.act({'x': 0.0}, deterministic=True)
+
+        self.assertEqual(sorted(np.round(action, 6).tolist()), [0.0, 0.0, 1.0])
