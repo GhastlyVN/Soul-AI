@@ -70,6 +70,7 @@ def health(soul: Soul, n_batches: int = 4) -> Optional[Dict[str, float]]:
 
     rew_pred, rew_true, top_slots = [], [], None
     errs, bases = {}, {}
+    ae_errs = []
     acts = []
     rets, vals = [], []
 
@@ -92,6 +93,16 @@ def health(soul: Soul, n_batches: int = 4) -> Optional[Dict[str, float]]:
             out = soul.model.dynamics.observe_sequence(
                 obs_in, ac, soul.model.encoder, va)
             h, z = out['h_seq'], out['z_seq']
+            # Cung mot doi chuan nhu Trainer: (h sau action, z truoc action)
+            # -> delta cua z. Metric nay cho thay plan_action co duoc du
+            # lieu de doan hau qua cua hanh dong hay khong.
+            if seq > 1:
+                pred_delta = soul.model.action_effect_head(h[:, 1:], z[:, :-1], ac[:, 1:])
+                true_delta = z[:, 1:] - z[:, :-1]
+                valid_ae = va[:, 1:].unsqueeze(-1).expand_as(pred_delta).bool()
+                if valid_ae.any():
+                    ae_errs.append(float(
+                        ((pred_delta[valid_ae] - true_delta[valid_ae]) ** 2).mean()))
             dec = soul.model.decoder(h, z)
             pr = soul.model.reward_head(h, z)
 
@@ -166,6 +177,7 @@ def health(soul: Soul, n_batches: int = 4) -> Optional[Dict[str, float]]:
     A = torch.cat(acts)
     return {
         'reward_r2': r2,
+        'action_effect_mse': (float(np.mean(ae_errs)) if ae_errs else float('nan')),
         'reward_pred_std': float(p.std()),
         'reward_true_std': float(y.std()),
         'policy_action_std': float(A.std()),
@@ -183,6 +195,7 @@ def fmt(h: Dict[str, float]) -> str:
             f"std_ph={h['reward_pred_std']:.3f}/{h['reward_true_std']:.3f}  "
             f"tai_tao/nen={h['recon_ratio']:.3f}  "
             f"do_lech_a={h['policy_action_std']:.4f}  "
+            f"AE={h['action_effect_mse']:.6f}  "
             f"critic={h['critic_std']:.2f}")
 
 
