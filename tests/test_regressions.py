@@ -660,3 +660,32 @@ class PlanningRuntimeStateTests(unittest.TestCase):
         h2 = soul._h.detach().cpu().numpy().copy()
         self.assertFalse(np.allclose(h1, h2, atol=1e-6),
                          'planning did not advance the hidden state on the next step')
+
+
+class PlanningSkillTests(unittest.TestCase):
+    def test_planner_biases_the_chosen_action_with_a_recalled_skill(self):
+        import torch
+
+        cfg = Config()
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 1
+        cfg.model.plan_samples = 3
+        cfg.train.batch_size = 2
+        cfg.train.seq_len = 4
+        soul = Soul(cfg)
+        obs = {'time': 0.0, 'x': 0.0, 'y': 0.0}
+
+        soul.recall_skill_action = lambda observation: None
+        soul._h = soul._z = soul._prev_action = None
+        torch.manual_seed(123)
+        base = soul.plan_action(obs, n_samples=3).copy()
+
+        soul.recall_skill_action = lambda observation: np.array([1.0], dtype=np.float32)
+        soul._h = soul._z = soul._prev_action = None
+        torch.manual_seed(123)
+        blended = soul.plan_action(obs, n_samples=3)
+
+        np.testing.assert_allclose(
+            blended, 0.7 * base + 0.3 * np.ones(1, dtype=np.float32), rtol=1e-6)
+        np.testing.assert_allclose(soul._prev_action, blended, rtol=1e-6)
