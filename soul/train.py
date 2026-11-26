@@ -118,8 +118,10 @@ def health(soul: Soul, n_batches: int = 4) -> Optional[Dict[str, float]]:
                 bases.setdefault(i, []).append(float((g.mean() - g).abs().mean()))
 
             with torch.no_grad():
-                mean, _, _ = soul.model.policy_head(h, z, gl[:, :seq])
-            acts.append(mean.reshape(-1).cpu())
+                mean, logstd, logits = soul.model.policy_head(h, z, gl[:, :seq])
+                sampled = soul.model.policy_head.sample(
+                    mean, logstd, logits, deterministic=False)
+            acts.append(sampled.reshape(-1).cpu())
 
             # Muoc tieu va gia tri trong tuong tuong — de xem critic co
             # theo kip khong. Truoc day critic phang (std 0.09) nen muc
@@ -128,10 +130,9 @@ def health(soul: Soul, n_batches: int = 4) -> Optional[Dict[str, float]]:
             rt, vl = [], []
             for _step in range(tc.imagine_horizon):
                 hp, zp = hh, zz
-                am, als, _ = soul.model.policy_head(hh, zz, gl[:, -1])
-                from .model import MIN_STD, _logstd_to_std
-                lsc = torch.maximum(als, torch.full_like(als, float(np.log(MIN_STD))))
-                aa = am + torch.randn_like(am) * _logstd_to_std(lsc)
+                am, als, logits = soul.model.policy_head(hh, zz, gl[:, -1])
+                aa = soul.model.policy_head.sample(
+                    am, als, logits, deterministic=False)
                 continuous_dim = aa.shape[-1] - soul.cfg.model.discrete_dim
                 applied_aa = torch.cat((
                     # PendulumEnv clips its continuous action to [-1, 1].
