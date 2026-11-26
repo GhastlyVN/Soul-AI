@@ -23,6 +23,7 @@ import torch
 try:
     from .safe_io import open_output, read_regular_bytes
     from .config import Config
+    from .dataset import apply_norm
     from .obs import ObsEncoder
     from .model import SoulModel
     from .memory import Episode, ReplayBuffer, MemoryManager
@@ -30,6 +31,7 @@ try:
 except ImportError:  # pragma: no cover - chạy trực tiếp như script
     from safe_io import open_output, read_regular_bytes
     from config import Config
+    from dataset import apply_norm
     from obs import ObsEncoder
     from model import SoulModel
     from memory import Episode, ReplayBuffer, MemoryManager
@@ -50,7 +52,7 @@ class SoulBrain:
 
     def perceive(self, observation: Any) -> np.ndarray:
         """Nhận biết quan sát hiện tại và biến thành vector đặc trưng."""
-        enc = self.soul.enc.encode(observation)
+        enc = self.soul._encode_observation(observation)
         return np.concatenate([enc['values'], enc['mask'], enc['text']], axis=0).astype(np.float32)
 
     def predict(self, observation: Any, action: np.ndarray) -> np.ndarray:
@@ -180,6 +182,13 @@ class Soul:
             self.load(checkpoint)
 
     # -----------------------------------------------------------------
+    def _encode_observation(self, observation: Any):
+        """Ma hoa quan sat bang CUNG thang da dung luc nap du lieu."""
+        if self.obs_norm:
+            observation = apply_norm(observation, self.obs_norm)
+        return self.enc.encode(observation)
+
+    # -----------------------------------------------------------------
     def set_goal(self, goal: np.ndarray):
         """Đặt mục tiêu cho chuỗi hành động tới. Vector mục tiêu có thể
         là one-hot, hoặc bất kỳ embedding nào bạn cung cấp. Mô hình chỉ
@@ -190,7 +199,7 @@ class Soul:
 
     def recall_skill_action(self, observation: Any) -> Optional[np.ndarray]:
         """Lấy skill phù hợp nhất với bối cảnh hiện tại để làm bias cho hành động."""
-        enc = self.enc.encode(observation)
+        enc = self._encode_observation(observation)
         context = {'goal': self._goal.copy().reshape(-1).tolist() if self._goal is not None else [],
                    'time': float(enc['values'][self.enc._schema.get('time', 0)] if 'time' in self.enc._schema else 0.0)}
         skills = self.memory_manager.recall_skills({'context': context})
@@ -229,7 +238,7 @@ class Soul:
                 self._goal = np.zeros((1, self.model.goal_dim), dtype=np.float32)
 
         goal = self._goal if self._goal is not None else np.zeros((1, self.model.goal_dim), np.float32)
-        enc = self.enc.encode(observation)
+        enc = self._encode_observation(observation)
         obs_vec = np.concatenate([enc['values'], enc['mask'], enc['text']], axis=0)
 
         # `act()` returns immediately after planning, so its own recurrent
@@ -305,7 +314,7 @@ class Soul:
             return action
 
         # Vector hóa quan sát.
-        enc = self.enc.encode(observation)
+        enc = self._encode_observation(observation)
         obs_vec = np.concatenate([enc['values'], enc['mask'], enc['text']], axis=0)
 
         # Khởi tạo trạng thái nếu lần đầu.
@@ -370,7 +379,7 @@ class Soul:
         được huấn luyện trên cặp (hidden sau action, latent sau action), nên
         `plan_action()` cần đúng hidden đó để chấm điểm candiate.
         """
-        enc = self.enc.encode(observation)
+        enc = self._encode_observation(observation)
         obs_vec = np.concatenate([enc['values'], enc['mask'], enc['text']], axis=0)
         act = np.asarray(action, dtype=np.float32).reshape(-1)
         if act.size < self.cfg.model.action_dim:
@@ -425,7 +434,7 @@ class Soul:
             self._prev_action = recorded_action.copy()
 
         # Vector hóa quan sát mới.
-        enc = self.enc.encode(observation)
+        enc = self._encode_observation(observation)
         g = np.asarray(goal if goal is not None else
                        (self._goal if self._goal is not None
                         else np.zeros(self.model.goal_dim, np.float32)),
