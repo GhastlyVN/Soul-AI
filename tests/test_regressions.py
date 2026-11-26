@@ -872,3 +872,37 @@ class CemActionShapeTests(unittest.TestCase):
 
                 self.assertEqual(tuple(action.shape), (1, action_dim))
                 self.assertTrue(bool(torch.isfinite(action).all()))
+    def test_cem_samples_each_action_dimension_independently(self):
+        import torch
+        from soul.plan import cem_first_action
+
+        cfg = Config()
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 4
+        cfg.model.discrete_dim = 0
+        cfg.train.batch_size = 2
+        cfg.train.seq_len = 2
+        soul = Soul(cfg)
+
+        seen = []
+        original = soul.model.action_effect_head.forward
+
+        def spy(hidden, latent, action):
+            if not seen:
+                seen.append(action.detach().cpu().clone())
+            return original(hidden, latent, action)
+
+        soul.model.action_effect_head.forward = spy
+        torch.manual_seed(0)
+        cem_first_action(
+            soul,
+            torch.zeros(1, cfg.model.hidden_dim),
+            torch.zeros(1, cfg.model.latent_dim),
+            horizon=1, iters=1, pop=4, elite=2,
+            act_lo=-1.0, act_hi=1.0)
+
+        candidates = seen[0]
+        self.assertEqual(tuple(candidates.shape), (4, 4))
+        self.assertGreater(
+            float((candidates - candidates[:, :1]).abs().mean()), 1e-3)
