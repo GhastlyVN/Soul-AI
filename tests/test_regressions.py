@@ -587,3 +587,17 @@ class PlanningRewardAlignmentTests(unittest.TestCase):
         self.assertGreater(len(seen_scores), 0)
         for hidden, scored in zip(seen_hidden, seen_scores):
             np.testing.assert_allclose(scored[0], hidden, rtol=1e-6, atol=1e-6)
+
+
+class TrainingScheduleTests(unittest.TestCase):
+    def test_each_batch_runs_two_updates(self):
+        cfg = Config()
+        self.assertEqual(cfg.train.updates_per_batch, 2)
+        soul = Soul(cfg)
+
+        calls = []
+        soul.replay.sample = lambda *args, **kwargs: {}
+        soul.trainer.update = lambda batch: calls.append(1) or {}
+
+        self.assertIsNotNone(soul.learn(force=True))
+        self.assertEqual(len(calls), 2)
