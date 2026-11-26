@@ -248,8 +248,11 @@ class TrainConfig:
     batch_size: int = 16
     seq_len: int = 12
     replay_capacity: int = 50000
-    # Số bước học cho mỗi lần nhận dữ liệu mới.
-    updates_per_batch: int = 1
+    # Số bước học cho mỗi lần nhận dữ liệu mới. Hai bước/lô cho cùng
+    # một lượng dữ liệu giúp action-effect MSE giảm ~13% ở 150 lô smoke
+    # (0.002676 -> 0.002334) và tăng độ phân biệt action thật/dao động
+    # từ 1.71x lên 2.97x. Chạy thêm một optimizer step là chi phí đã đo.
+    updates_per_batch: int = 2
     warmup_updates: int = 100
     seed: int = 0
 
