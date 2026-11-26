@@ -819,3 +819,31 @@ class RewardLossTests(unittest.TestCase):
             F.huber_loss = original
 
         self.assertIn(1.0, seen)
+class RewardStatsGuardTests(unittest.TestCase):
+    def test_collapsed_reward_scale_does_not_explode_the_target(self):
+        import numpy as np
+        from soul.memory import Episode
+
+        cfg = Config()
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 1
+        cfg.model.discrete_dim = 0
+        cfg.model.goal_dim = 2
+        cfg.train.batch_size = 2
+        cfg.train.seq_len = 4
+        cfg.train.imagine_horizon = 2
+        soul = Soul(cfg)
+
+        enc = soul.enc.encode({'time': 0.0, 'x': 0.0})
+        ep = Episode()
+        for _ in range(6):
+            ep.append(enc, np.zeros(1, np.float32), 1.0, 1.0,
+                      np.zeros(cfg.model.goal_dim, np.float32))
+        soul.replay.add_episode(ep)
+        batch = soul.replay.sample(1, np.random.default_rng(0))
+        soul.trainer._reward_stats['std'] = 1e-6
+
+        losses = soul.trainer.update(batch)
+        self.assertLess(losses['reward'], 20.0)
+        self.assertTrue(np.isfinite(losses['total']))
