@@ -260,9 +260,11 @@ class Soul:
                 elif action.size > self.cfg.model.action_dim:
                     action = action[:self.cfg.model.action_dim]
 
-                pred_state = self.predict_action_effect(observation, action)
+                pred_state, h_next = self.predict_action_effect(
+                    observation, action, return_hidden=True)
                 pred_state_t = torch.as_tensor(pred_state, device=self.device, dtype=torch.float32).unsqueeze(0)
-                reward_hat = self.model.reward_head(h, pred_state_t).squeeze(0)
+                h_next_t = torch.as_tensor(h_next, device=self.device, dtype=torch.float32).unsqueeze(0)
+                reward_hat = self.model.reward_head(h_next_t, pred_state_t).squeeze(0)
                 action_penalty = 0.05 * float(np.mean(np.square(action)))
                 score = float(reward_hat.item()) - action_penalty
                 if score > best_score:
@@ -343,12 +345,17 @@ class Soul:
         return action
 
     # -----------------------------------------------------------------
-    def predict_action_effect(self, observation: Any, action: np.ndarray) -> np.ndarray:
+    def predict_action_effect(self, observation: Any, action: np.ndarray,
+                              return_hidden: bool = False):
         """Dự đoán trạng thái latent sau khi thực hiện một hành động.
 
         Hàm này trả về vector latent "điều gì sẽ diễn ra tiếp theo nếu làm
         hành động này ở quan sát hiện tại" — đó là cách cơ bản để AI "tính
         trước hậu quả" như con người nhìn một động tác và suy đoán hậu quả.
+
+        `return_hidden=True` trả thêm hidden state SAU hành động. `RewardHead`
+        được huấn luyện trên cặp (hidden sau action, latent sau action), nên
+        `plan_action()` cần đúng hidden đó để chấm điểm candiate.
         """
         enc = self.enc.encode(observation)
         obs_vec = np.concatenate([enc['values'], enc['mask'], enc['text']], axis=0)
@@ -377,6 +384,9 @@ class Soul:
             pred_delta = self.model.action_effect_head(h, q_mu, a)
             pred_state = q_mu + pred_delta
 
+        if return_hidden:
+            return (pred_state.squeeze(0).cpu().numpy(),
+                    h.squeeze(0).cpu().numpy())
         return pred_state.squeeze(0).cpu().numpy()
 
     def observe(self, observation: Any, action: np.ndarray,

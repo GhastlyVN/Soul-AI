@@ -87,7 +87,7 @@ Shape mặc định từ config: `D=2*256+128=640`, `Hid=96`, `Z=24`, `A=4`, `G=
 | `set_goal(goal)` | Vector goal → lưu goal dạng `(1,G)` nếu đầu vào `(G,)`. | `_goal` được đưa vào policy/value. |
 | `plan_action(observation,n_samples,deterministic)` | Quan sát → action `np.ndarray (A,)`. | Khởi tạo nếu cần; lấy posterior mean, lấy mẫu từ policy rồi chấm action-effect/reward; khác với CEM ở `plan.py`. |
 | `act(observation,deterministic)` | Quan sát thô → action `np.ndarray (A,)`. | Mã hóa quan sát, tiến dynamics bằng `_prev_action`, gán posterior từ quan sát hiện tại, rồi policy; có thể đi qua `plan_action` khi sampling planner bật. |
-| `predict_action_effect(observation,action)` | Quan sát và action → latent dự đoán `np.ndarray (Z,)`. | Tính encoder mean cộng action-effect delta; chạy trong `no_grad`. |
+| `predict_action_effect(observation,action,return_hidden=False)` | Quan sát và action → latent dự đoán `np.ndarray (Z,)`; nếu `return_hidden=True` trả thêm hidden sau action. | Tính encoder mean cộng action-effect delta; chạy trong `no_grad`. `plan_action()` dùng hidden sau action để chấm điểm đúng `RewardHead`. |
 | `observe(observation,action,reward,done,goal, applied_action,record)` | Kết quả transition → `None`. | Mặc định ghi Episode, replay khi done, memory event/skill; action được lưu là `applied_action` nếu truyền. `record=False` bỏ ghi episode/memory nhưng vẫn tăng `steps` và xử lý reset khi done. |
 | `learn(force,real_time,online_steps)` | Cờ/lượng dữ liệu → dict loss hoặc `None`. | Lấy replay batch, gọi `Trainer.update`; online mode ưu tiên episode hiện hành. |
 | `step(observation,reward,done,deterministic)` | Một lần gộp interface → `(action, loss_dict)`. | Gọi `act`, `observe`, `learn(real_time=True)`. |

@@ -546,3 +546,44 @@ class ActionEffectTrainingTests(unittest.TestCase):
         self.assertTrue(any(p.grad is not None for p in head.parameters()))
         norm = sum(float(p.grad.norm()) for p in head.parameters() if p.grad is not None)
         self.assertGreater(norm, 0.0)
+
+
+class PlanningRewardAlignmentTests(unittest.TestCase):
+    def test_planner_scores_with_hidden_after_action(self):
+        cfg = Config()
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 1
+        cfg.model.plan_samples = 3
+        cfg.train.batch_size = 2
+        cfg.train.seq_len = 4
+        soul = Soul(cfg)
+        obs = {'time': 0.0, 'x': 0.0, 'y': 0.0}
+        zero = np.zeros(cfg.model.action_dim, dtype=np.float32)
+        soul.predict_action_effect(obs, zero)  # initialise runtime state
+
+        seen_hidden = []
+
+        def prediction_spy(observation, action, **kwargs):
+            latent, hidden = original_prediction(
+                observation, action, return_hidden=True)
+            seen_hidden.append(hidden.copy())
+            return latent, hidden
+
+        original_prediction = soul.predict_action_effect
+        soul.predict_action_effect = prediction_spy
+
+        seen_scores = []
+        original_reward = soul.model.reward_head.forward
+
+        def reward_spy(hidden, latent):
+            seen_scores.append(hidden.detach().cpu().numpy().copy())
+            return original_reward(hidden, latent)
+
+        soul.model.reward_head.forward = reward_spy
+        soul.plan_action(obs, n_samples=3)
+
+        self.assertEqual(len(seen_hidden), len(seen_scores))
+        self.assertGreater(len(seen_scores), 0)
+        for hidden, scored in zip(seen_hidden, seen_scores):
+            np.testing.assert_allclose(scored[0], hidden, rtol=1e-6, atol=1e-6)
