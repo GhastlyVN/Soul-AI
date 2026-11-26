@@ -635,3 +635,28 @@ class HealthDiscreteActionTests(unittest.TestCase):
         self.assertIn('action_effect_mse', report)
         for value in report.values():
             self.assertTrue(np.isfinite(value), msg=value)
+
+
+class PlanningRuntimeStateTests(unittest.TestCase):
+    def test_planning_advances_the_recurrent_state(self):
+        cfg = Config()
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 1
+        cfg.model.plan_samples = 3
+        cfg.train.batch_size = 2
+        cfg.train.seq_len = 4
+        soul = Soul(cfg)
+
+        obs = {'time': 0.0, 'x': 0.1, 'y': 0.0}
+        soul.plan_action(obs, n_samples=3)
+        h1 = soul._h.detach().cpu().numpy().copy()
+
+        self.assertTrue(np.any(np.abs(h1) > 1e-6),
+                        'planning left the hidden state at its initial zeros')
+
+        obs2 = {'time': 1.0, 'x': 0.6, 'y': 0.2}
+        soul.plan_action(obs2, n_samples=3)
+        h2 = soul._h.detach().cpu().numpy().copy()
+        self.assertFalse(np.allclose(h1, h2, atol=1e-6),
+                         'planning did not advance the hidden state on the next step')

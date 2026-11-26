@@ -232,13 +232,25 @@ class Soul:
         enc = self.enc.encode(observation)
         obs_vec = np.concatenate([enc['values'], enc['mask'], enc['text']], axis=0)
 
+        # `act()` returns immediately after planning, so its own recurrent
+        # update never runs on the planning path. Advance h with the previous
+        # action and anchor z to this observation here instead; otherwise the
+        # planner scores every step from the episode's initial zero state.
         with torch.no_grad():
             h = torch.as_tensor(self._h, device=self.device)
             z = torch.as_tensor(self._z, device=self.device)
+            prev = self._prev_action
+            if prev is None:
+                prev = np.zeros(self.cfg.model.action_dim, dtype=np.float32)
+            a_prev = torch.as_tensor(prev, device=self.device).unsqueeze(0)
             g = torch.as_tensor(goal, device=self.device)
             o = torch.as_tensor(obs_vec, device=self.device).unsqueeze(0)
+            h, _, _ = self.model.dynamics.step(h, z, a_prev)
             q_mu, _ = self.model.encoder(o)
-            mean, logstd, logits = self.model.policy_head(h, q_mu, g)
+            z = q_mu
+            self._h = h
+            self._z = z
+            mean, logstd, logits = self.model.policy_head(h, z, g)
             candidates = []
             if deterministic:
                 candidates.append(self.model.policy_head.sample(
@@ -273,6 +285,7 @@ class Soul:
 
             if best_action is None:
                 best_action = np.zeros(self.cfg.model.action_dim, dtype=np.float32)
+            self._prev_action = best_action
             return best_action
 
     def act(self, observation: Any, deterministic: bool = False) -> np.ndarray:
