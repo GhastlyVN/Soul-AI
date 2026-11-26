@@ -952,3 +952,57 @@ class DatasetIngestTests(unittest.TestCase):
         eps[0]['act'][0][0] = 1.5
         with self.assertRaises(ValueError):
             to_episodes(soul, eps, 2)
+
+class ObservationNormRuntimeTests(unittest.TestCase):
+    def _make_soul(self):
+        cfg = Config()
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 1
+        cfg.model.discrete_dim = 0
+        cfg.model.goal_dim = 2
+        cfg.train.batch_size = 2
+        cfg.train.seq_len = 4
+        return Soul(cfg)
+
+    def test_planning_and_observing_use_dataset_normalization(self):
+        soul = self._make_soul()
+        soul.obs_norm = {'temperature': {'mean': 20.0, 'std': 0.5}}
+        seen = []
+        original = soul.enc.encode
+
+        def spy(observation):
+            seen.append(observation)
+            return original(observation)
+
+        soul.enc.encode = spy
+        soul.plan_action({'temperature': 21.0}, n_samples=2)
+        soul.observe({'temperature': 22.0}, np.zeros(1, np.float32),
+                     0.0, False, record=False)
+
+        temps = sorted(round(float(o['temperature']), 6) for o in seen)
+        self.assertEqual(temps, [2.0, 2.0, 4.0])
+
+    def test_checkpoint_preserves_runtime_normalization(self):
+        import tempfile
+        from pathlib import Path
+
+        soul = self._make_soul()
+        soul.obs_norm = {'temperature': {'mean': 20.0, 'std': 0.5}}
+        path = Path(tempfile.mkdtemp()) / 'soul.pt'
+        soul.save(str(path))
+
+        loaded = self._make_soul()
+        loaded.load(str(path))
+        seen = []
+        original = loaded.enc.encode
+
+        def spy(observation):
+            seen.append(observation)
+            return original(observation)
+
+        loaded.enc.encode = spy
+        loaded.plan_action({'temperature': 21.0}, n_samples=2)
+
+        self.assertTrue(seen)
+        self.assertAlmostEqual(seen[0]['temperature'], 2.0)

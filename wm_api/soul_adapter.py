@@ -76,7 +76,7 @@ class SoulAdapter(WorldModel):
     def observe(self, obs: Any, action: int, reward: float,
                 done: bool) -> None:
         encoded_action = self._encode_action(action)
-        encoded_obs = self.soul.enc.encode(obs)
+        encoded_obs = self.soul._encode_observation(obs)
         current_h = self._wm_h if self._wm_h is not None else self.soul._h
         current_z = self._wm_z if self._wm_z is not None else self.soul._z
         if current_h is None or current_z is None:
