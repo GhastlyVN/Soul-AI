@@ -232,7 +232,8 @@ def cem_first_action(soul, h, z, horizon, iters, pop, elite, act_lo, act_hi):
     first = torch.zeros(1, action_dim, device=dev)
     B = pop
     for _ in range(iters):
-        cand = (mu + sd * torch.randn(B, horizon, 1, device=dev)).clamp(
+        cand = (mu + sd * torch.randn(
+            B, horizon, action_dim, device=dev)).clamp(
             max(act_lo, -1.0), min(act_hi, 1.0))
         hh = h.expand(B, -1).contiguous()
         zz = z.expand(B, -1).contiguous()
