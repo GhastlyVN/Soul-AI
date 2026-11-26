@@ -777,5 +777,5 @@ class CemActionEffectTests(unittest.TestCase):
             act_lo=-1.0, act_hi=1.0)
 
         self.assertEqual(len(seen), 2)
-        self.assertEqual(seen[0], ((4, 8), (4, 4), (4, 1, 1)))
+        self.assertEqual(seen[0], ((4, 8), (4, 4), (4, 1)))
         self.assertEqual(tuple(action.shape), (1, 1))
