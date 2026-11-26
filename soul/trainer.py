@@ -232,7 +232,10 @@ class Trainer:
         # nen do lon cua loi sai cung don vi, va uu tien khong con phu
         # thuoc vao thang do.
         rew_stats = self._reward_stats
-        rewards_n = (rewards - rew_stats['mean']) / max(rew_stats['std'], 1e-6)
+        # A collapsed EMA std (constant-reward episodes) would otherwise
+        # turn one ordinary reward into a million-scale target.
+        rewards_n = ((rewards - rew_stats['mean'])
+                     / max(rew_stats['std'], 1e-6)).clamp(-10.0, 10.0)
         pred_rew = m.reward_head(h_seq, z_seq)
         # MSE let a few large rewards dominate the head and hurt held-out
         # R2 (-0.47 -> -0.38 median on the smoke split); Huber keeps the
