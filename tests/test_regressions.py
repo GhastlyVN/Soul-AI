@@ -1006,3 +1006,42 @@ class ObservationNormRuntimeTests(unittest.TestCase):
 
         self.assertTrue(seen)
         self.assertAlmostEqual(seen[0]['temperature'], 2.0)
+
+class CheckpointReplayStateTests(unittest.TestCase):
+    def test_checkpoint_restores_replay_size_and_open_episode(self):
+        from pathlib import Path
+
+        from soul.memory import Episode
+
+        cfg = Config()
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 1
+        cfg.model.discrete_dim = 0
+        cfg.model.goal_dim = 2
+        cfg.train.batch_size = 2
+        cfg.train.seq_len = 2
+        cfg.train.replay_capacity = 10
+        soul = Soul(cfg)
+
+        def episode(length):
+            ep = Episode()
+            enc = soul.enc.encode({'x': 0.0})
+            for _ in range(length):
+                ep.append(enc, np.zeros(1, np.float32), 0.0, 1.0,
+                          np.zeros(cfg.model.goal_dim, np.float32))
+            return ep
+
+        soul.replay.add_episode(episode(3))
+        soul.replay.add_episode(episode(3))
+        soul._cur_ep = episode(2)
+
+        path = Path(tempfile.mkdtemp()) / 'soul.pt'
+        soul.save(str(path))
+        loaded = Soul(cfg, checkpoint=str(path))
+
+        self.assertEqual(loaded.replay.size, 6)
+        self.assertEqual(len(loaded._cur_ep), 2)
+        loaded.replay.add_episode(episode(5))
+        self.assertEqual(len(loaded.replay.episodes), 2)
+        self.assertEqual(loaded.replay.size, 8)
