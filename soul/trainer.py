@@ -60,7 +60,7 @@ class Trainer:
         # te hon — nen day la thieu buoc toi uu chu khong phai thieu du
         # lieu. Xem `diag_sweep.py` va ghi chu `head_lr` trong config.py.
         head_mods = [model.decoder, model.reward_head, model.continue_head,
-                     model.value_head]
+                     model.value_head, model.action_effect_head]
         head_ids = {id(p) for mod in head_mods for p in mod.parameters()}
         pol_ids = {id(p) for p in model.policy_head.parameters()}
         rep = [p for p in model.parameters()
@@ -145,6 +145,19 @@ class Trainer:
         transition_valid = torch.ones((post_mu.shape[0], post_mu.shape[1]),
                                       device=post_mu.device, dtype=torch.float32)
         transition_valid[:, 0] = 0.0
+
+        # --- 1b. HIEU UNG HANH DONG ---
+        # `predict_action_effect` su dung `q_mu` cua quan sat HIENTAI + `h`
+        # sau buoc action de doan latent cua quan sat tiep theo. Tuong tu:
+        # post_mu[t-1] -> (h[t], a[t]) -> post_mu[t].
+        # Chep inputs/target de loss chi day cai dau (doc latent), khong
+        # keo representation theo mot muc tieu mot buoc.
+        ae_pred = m.action_effect_head(
+            h_seq[:, 1:].detach(), post_mu[:, :-1].detach(), actions[:, 1:])
+        ae_target = (post_mu[:, 1:] - post_mu[:, :-1]).detach()
+        ae_valid = transition_valid[:, 1:].unsqueeze(-1)
+        ae_loss = (F.mse_loss(ae_pred, ae_target, reduction='none') * ae_valid).sum()
+        ae_loss = ae_loss / ae_valid.sum().clamp_min(1.0)
 
         # --- 2. KL: prior gan posterior ---
         # Free nats: cat moi phan KL duoi 1.0 nat duoc bo qua. Cach nay
@@ -303,7 +316,7 @@ class Trainer:
             policy_loss, policy_params, retain_graph=True, allow_unused=True)
 
         total = (tc.w_recon * recon + tc.w_kl * kl + tc.w_reward * rew_pred_loss
-                 + tc.w_continue * cont_loss
+                 + tc.w_continue * cont_loss + tc.w_action_effect * ae_loss
                  + tc.w_value * value_loss + ent_w * ent_loss)
 
         self.optimizer.zero_grad(set_to_none=True)
@@ -332,6 +345,7 @@ class Trainer:
             'kl': float(kl.item()),
             'reward': float(rew_pred_loss.item()),
             'continue': float(cont_loss.item()),
+            'action_effect': float(ae_loss.item()),
             'policy': float(policy_loss.item()),
             'value': float(value_loss.item()),
             'grad_norm': float(grad_norm.item()),

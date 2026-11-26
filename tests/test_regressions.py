@@ -512,3 +512,37 @@ class SoulRegressionTests(unittest.TestCase):
                 ArchiveMemory().load(alias)
 if __name__ == '__main__':
     unittest.main()
+
+
+class ActionEffectTrainingTests(unittest.TestCase):
+    def test_action_effect_head_is_trained(self):
+        cfg = Config()
+        cfg.obs.max_features = 4
+        cfg.obs.text_buckets = 4
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 1
+        cfg.model.goal_dim = 2
+        cfg.train.imagine_horizon = 2
+        cfg.train.seq_len = 3
+        soul = Soul(cfg)
+        rng = np.random.default_rng(7)
+        seq = cfg.train.seq_len
+        batch = {
+            'values': rng.normal(size=(2, seq + 1, cfg.obs.max_features)).astype(np.float32),
+            'masks': np.ones((2, seq + 1, cfg.obs.max_features), np.float32),
+            'texts': np.zeros((2, seq + 1, cfg.obs.text_buckets), np.float32),
+            'actions': rng.normal(size=(2, seq, cfg.model.action_dim)).astype(np.float32),
+            'rewards': rng.normal(size=(2, seq)).astype(np.float32),
+            'continues': np.ones((2, seq), np.float32),
+            'goals': np.zeros((2, seq, cfg.model.goal_dim), np.float32),
+            'valid': np.ones((2, seq), np.float32),
+        }
+
+        losses = soul.trainer.update(batch)
+
+        self.assertTrue(np.isfinite(losses['action_effect']))
+        head = soul.model.action_effect_head
+        self.assertTrue(any(p.grad is not None for p in head.parameters()))
+        norm = sum(float(p.grad.norm()) for p in head.parameters() if p.grad is not None)
+        self.assertGreater(norm, 0.0)
