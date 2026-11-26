@@ -779,3 +779,43 @@ class CemActionEffectTests(unittest.TestCase):
         self.assertEqual(len(seen), 2)
         self.assertEqual(seen[0], ((4, 8), (4, 4), (4, 1)))
         self.assertEqual(tuple(action.shape), (1, 1))
+class RewardLossTests(unittest.TestCase):
+    def test_reward_head_uses_huber_loss(self):
+        import numpy as np
+        import torch.nn.functional as F
+
+        cfg = Config()
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 1
+        cfg.model.discrete_dim = 0
+        cfg.model.goal_dim = 2
+        cfg.train.batch_size = 2
+        cfg.train.seq_len = 4
+        cfg.train.imagine_horizon = 2
+        soul = Soul(cfg)
+
+        enc = soul.enc.encode({'time': 0.0, 'x': 0.0})
+        ep = soul._cur_ep
+        for _ in range(6):
+            ep.append(enc, np.zeros(1, np.float32), 0.0, 1.0,
+                      np.zeros(cfg.model.goal_dim, np.float32))
+        batch = soul.replay.sample(1, np.random.default_rng(0))
+        if batch is None:
+            soul.replay.add_episode(ep)
+            batch = soul.replay.sample(1, np.random.default_rng(0))
+
+        seen = []
+        original = F.huber_loss
+
+        def spy(*args, **kwargs):
+            seen.append(kwargs.get('delta'))
+            return original(*args, **kwargs)
+
+        F.huber_loss = spy
+        try:
+            soul.trainer.update(batch)
+        finally:
+            F.huber_loss = original
+
+        self.assertIn(1.0, seen)
