@@ -107,6 +107,7 @@ def _evaluate_soul(soul, seed, episodes, steps, env_fn=PendulumEnv):
         soul._cur_ep,
         soul.ep_reward,
         soul.ep_len,
+        soul.steps,
     )
     try:
         with torch.random.fork_rng():
@@ -137,7 +138,7 @@ def _evaluate_soul(soul, seed, episodes, steps, env_fn=PendulumEnv):
     finally:
         (soul._h, soul._z, soul._prev_action,
          soul._goal, soul._cur_ep,
-         soul.ep_reward, soul.ep_len) = runtime_state
+         soul.ep_reward, soul.ep_len, soul.steps) = runtime_state
     return mode_returns
 
 
