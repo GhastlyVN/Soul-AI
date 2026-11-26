@@ -632,5 +632,6 @@ class HealthDiscreteActionTests(unittest.TestCase):
         report = health(soul, n_batches=1)
 
         self.assertIsNotNone(report)
+        self.assertIn('action_effect_mse', report)
         for value in report.values():
             self.assertTrue(np.isfinite(value), msg=value)
