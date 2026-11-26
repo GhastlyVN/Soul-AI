@@ -291,6 +291,18 @@ def apply_norm(obs: Any, stats: Dict[str, Dict[str, float]],
 # ----------------------------------------------------------------------
 # Dua vao replay
 # ----------------------------------------------------------------------
+def format_action(action: np.ndarray, cfg) -> np.ndarray:
+    """Hanh dong ma moi truong se thuc hien sau khi clip/one-hot."""
+    out = np.asarray(action, dtype=np.float32).reshape(-1).copy()
+    cont = int(cfg.model.action_dim) - int(cfg.model.discrete_dim)
+    out[:cont] = np.clip(out[:cont], -1.0, 1.0)
+    if cfg.model.discrete_dim:
+        idx = int(np.argmax(out[cont:]))
+        out[cont:] = 0.0
+        out[cont + idx] = 1.0
+    return out
+
+
 def to_episodes(soul, eps: List[Dict[str, Any]], goal_dim: int,
                 stats: Dict[str, Dict[str, float]] = None) -> List[Episode]:
     """Bien cac episode thanh `Episode` da vector hoa san.
@@ -303,7 +315,7 @@ def to_episodes(soul, eps: List[Dict[str, Any]], goal_dim: int,
         ep = Episode()
         for o, a, r, d in zip(e['obs'], e['act'], e['rew'], e['done']):
             applied = np.asarray(a, dtype=np.float32).reshape(-1)
-            expected = soul._format_action(applied)
+            expected = format_action(applied, soul.cfg)
             if applied.size != soul.cfg.model.action_dim or not np.allclose(
                     applied, expected, rtol=0.0, atol=1e-6):
                 raise ValueError(

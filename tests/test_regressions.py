@@ -906,3 +906,49 @@ class CemActionShapeTests(unittest.TestCase):
         self.assertEqual(tuple(candidates.shape), (4, 4))
         self.assertGreater(
             float((candidates - candidates[:, :1]).abs().mean()), 1e-3)
+
+class DatasetIngestTests(unittest.TestCase):
+    def test_ingest_sample_csv_builds_replay_episodes(self):
+        import tempfile
+        from pathlib import Path
+
+        from soul.dataset import ingest, make_sample_csv
+
+        path = Path(tempfile.mkdtemp()) / 'sample.csv'
+        make_sample_csv(str(path), n_ep=2, length=6)
+        cfg = Config()
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 1
+        cfg.model.discrete_dim = 0
+        cfg.train.batch_size = 2
+        cfg.train.seq_len = 4
+        soul = Soul(cfg)
+
+        self.assertEqual(ingest(soul, str(path)), 2)
+        self.assertEqual(len(soul.replay.episodes), 2)
+        self.assertIn('position', soul.obs_norm)
+
+    def test_ingest_rejects_actions_outside_applied_bounds(self):
+        from soul.dataset import to_episodes
+
+        cfg = Config()
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 3
+        cfg.model.discrete_dim = 2
+        cfg.model.goal_dim = 2
+        cfg.train.batch_size = 2
+        cfg.train.seq_len = 2
+        soul = Soul(cfg)
+        eps = [{
+            'obs': [{'x': 0.1}],
+            'act': [np.array([0.5, 1.0, 0.0], np.float32)],
+            'rew': [0.0],
+            'done': [True],
+        }]
+        self.assertEqual(len(to_episodes(soul, eps, 2)), 1)
+
+        eps[0]['act'][0][0] = 1.5
+        with self.assertRaises(ValueError):
+            to_episodes(soul, eps, 2)
