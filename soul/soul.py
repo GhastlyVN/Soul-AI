@@ -262,29 +262,24 @@ class Soul:
                     candidates.append(self.model.policy_head.sample(
                         mean, logstd, logits, deterministic=False).squeeze(0))
 
-            best_action = None
-            best_score = -float('inf')
-            for cand in candidates:
-                action = cand.cpu().numpy().reshape(-1)
-                if action.size < self.cfg.model.action_dim:
-                    pad = np.zeros(self.cfg.model.action_dim - action.size, dtype=np.float32)
-                    action = np.concatenate([action, pad])
-                elif action.size > self.cfg.model.action_dim:
-                    action = action[:self.cfg.model.action_dim]
+            # Score every candidate in one pass. The old loop ran the
+            # encoder, GRU and both heads once per sample (96 times by
+            # default) even though every candidate shares h and z.
+            cand = torch.stack(candidates)
+            act_dim = self.cfg.model.action_dim
+            if cand.shape[-1] < act_dim:
+                pad = cand.new_zeros(cand.shape[0], act_dim - cand.shape[-1])
+                cand = torch.cat([cand, pad], -1)
+            elif cand.shape[-1] > act_dim:
+                cand = cand[:, :act_dim]
 
-                pred_state, h_next = self.predict_action_effect(
-                    observation, action, return_hidden=True)
-                pred_state_t = torch.as_tensor(pred_state, device=self.device, dtype=torch.float32).unsqueeze(0)
-                h_next_t = torch.as_tensor(h_next, device=self.device, dtype=torch.float32).unsqueeze(0)
-                reward_hat = self.model.reward_head(h_next_t, pred_state_t).squeeze(0)
-                action_penalty = 0.05 * float(np.mean(np.square(action)))
-                score = float(reward_hat.item()) - action_penalty
-                if score > best_score:
-                    best_score = score
-                    best_action = action.astype(np.float32)
-
-            if best_action is None:
-                best_action = np.zeros(self.cfg.model.action_dim, dtype=np.float32)
+            h_b = h.expand(cand.shape[0], -1)
+            z_b = z.expand(cand.shape[0], -1)
+            h_next, _, _ = self.model.dynamics.step(h_b, z_b, cand)
+            pred_state = z_b + self.model.action_effect_head(h_next, z_b, cand)
+            scores = (self.model.reward_head(h_next, pred_state)
+                      - 0.05 * cand.square().mean(-1))
+            best_action = cand[int(scores.argmax().item())].cpu().numpy().astype(np.float32)
             # Planning is the default action path, so without this the
             # recalled skill only ever biases the rarely used direct path.
             skill_action = self.recall_skill_action(observation)
