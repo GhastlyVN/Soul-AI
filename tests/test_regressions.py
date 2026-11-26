@@ -601,3 +601,36 @@ class TrainingScheduleTests(unittest.TestCase):
 
         self.assertIsNotNone(soul.learn(force=True))
         self.assertEqual(len(calls), 2)
+
+
+class HealthDiscreteActionTests(unittest.TestCase):
+    def test_health_works_with_discrete_only_actions(self):
+        from soul.memory import Episode
+        from soul.train import health
+
+        cfg = Config()
+        cfg.obs.max_features = 4
+        cfg.obs.text_buckets = 4
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 3
+        cfg.model.discrete_dim = 3
+        cfg.model.goal_dim = 2
+        cfg.train.batch_size = 2
+        cfg.train.seq_len = 2
+        cfg.train.imagine_horizon = 2
+        soul = Soul(cfg)
+
+        for _ in range(2):
+            ep = Episode()
+            for _step in range(3):
+                enc = soul.enc.encode({'time': 0.0, 'x': 0.0, 'y': 0.0})
+                ep.append(enc, np.eye(3, dtype=np.float32)[0], 1.0, 1.0,
+                          np.zeros(cfg.model.goal_dim, dtype=np.float32))
+            soul.replay.add_episode(ep)
+
+        report = health(soul, n_batches=1)
+
+        self.assertIsNotNone(report)
+        for value in report.values():
+            self.assertTrue(np.isfinite(value), msg=value)
