@@ -226,9 +226,10 @@ def counterfactual(soul, n_batches=4, rng=None):
 def cem_first_action(soul, h, z, horizon, iters, pop, elite, act_lo, act_hi):
     dev = soul.device
     gamma = soul.cfg.train.gamma
-    mu = torch.zeros(1, horizon, 1, device=dev)
-    sd = torch.full((1, horizon, 1), 1.5, device=dev)
-    first = torch.zeros(1, 1, device=dev)
+    action_dim = int(soul.cfg.model.action_dim)
+    mu = torch.zeros(1, horizon, action_dim, device=dev)
+    sd = torch.full((1, horizon, action_dim), 1.5, device=dev)
+    first = torch.zeros(1, action_dim, device=dev)
     B = pop
     for _ in range(iters):
         cand = (mu + sd * torch.randn(B, horizon, 1, device=dev)).clamp(
