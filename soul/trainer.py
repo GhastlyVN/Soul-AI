@@ -234,7 +234,10 @@ class Trainer:
         rew_stats = self._reward_stats
         rewards_n = (rewards - rew_stats['mean']) / max(rew_stats['std'], 1e-6)
         pred_rew = m.reward_head(h_seq, z_seq)
-        rew_pred_loss = F.mse_loss(pred_rew, rewards_n)
+        # MSE let a few large rewards dominate the head and hurt held-out
+        # R2 (-0.47 -> -0.38 median on the smoke split); Huber keeps the
+        # same normalized target but caps each outlier's gradient.
+        rew_pred_loss = F.huber_loss(pred_rew, rewards_n, delta=1.0)
         # Cap nhat thong ke tren CHINH phan thuong thuc, khong phai ban
         # chuan hoa — nen khong feedback vo hinh.
         # `.item()` de giu lai float thuan: tensor dua vao checkpoint se
