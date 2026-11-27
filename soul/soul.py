@@ -219,14 +219,37 @@ class Soul:
 
     def _blend_skill_action(self, action: np.ndarray,
                             skill_action: np.ndarray) -> np.ndarray:
-        """Bias hanh dong bang skill nhung giu one-hot phan roi rac."""
-        blended = (0.7 * np.asarray(action, dtype=np.float32).reshape(-1)
-                   + 0.3 * np.asarray(skill_action, dtype=np.float32).reshape(-1))
-        cont = int(self.cfg.model.action_dim) - int(self.cfg.model.discrete_dim)
-        if self.cfg.model.discrete_dim:
-            idx = int(np.argmax(blended[cont:]))
-            blended[cont:] = 0.0
-            blended[cont + idx] = 1.0
+        """Blend skills into continuous controls without inventing a categorical prior.
+
+        Archived skill summaries currently store scalar action means, not calibrated
+        discrete distributions. Keep the policy-selected discrete category unchanged
+        until memory records an explicit categorical prior and confidence.
+        """
+        action_dim = int(self.cfg.model.action_dim)
+        discrete_dim = int(self.cfg.model.discrete_dim)
+        if not 0 <= discrete_dim <= action_dim:
+            raise ValueError("discrete_dim must be between zero and action_dim")
+
+        blended = np.asarray(action, dtype=np.float32).reshape(-1).copy()
+        if blended.size != action_dim:
+            raise ValueError(
+                f"policy action has {blended.size} values; expected {action_dim}"
+            )
+        recalled = np.asarray(skill_action, dtype=np.float32).reshape(-1)
+        if recalled.size < action_dim:
+            recalled = np.pad(recalled, (0, action_dim - recalled.size))
+        elif recalled.size > action_dim:
+            recalled = recalled[:action_dim]
+
+        continuous_dim = action_dim - discrete_dim
+        blended[:continuous_dim] = (
+            0.7 * blended[:continuous_dim] + 0.3 * recalled[:continuous_dim]
+        )
+        if discrete_dim:
+            discrete = blended[continuous_dim:]
+            selected = int(np.argmax(discrete))
+            discrete.fill(0.0)
+            discrete[selected] = 1.0
         return blended.astype(np.float32)
 
     def plan_action(self, observation: Any, n_samples: Optional[int] = None,
