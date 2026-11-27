@@ -1068,7 +1068,7 @@ class EvalStateTests(unittest.TestCase):
         self.assertEqual(soul.steps, 7)
 
 class DiscreteSkillBlendTests(unittest.TestCase):
-    def test_skill_bias_keeps_discrete_actions_one_hot(self):
+    def test_conflicting_skill_does_not_override_discrete_policy_choice(self):
         import torch
 
         cfg = Config()
@@ -1084,9 +1084,31 @@ class DiscreteSkillBlendTests(unittest.TestCase):
         soul.model.policy_head.sample = (
             lambda mean, logstd, logits, deterministic=False:
             torch.tensor([[0.0, 1.0, 0.0]]))
+        # A real categorical skill that conflicts with the policy must not be
+        # blended as if its one-hot vector were a calibrated probability prior.
         soul.recall_skill_action = (
-            lambda observation: np.full(3, 0.5, np.float32))
+            lambda observation: np.array([1.0, 0.0, 0.0], np.float32))
 
         action = soul.act({'x': 0.0}, deterministic=True)
 
-        self.assertEqual(sorted(np.round(action, 6).tolist()), [0.0, 0.0, 1.0])
+        np.testing.assert_array_equal(action, np.array([0.0, 1.0, 0.0], np.float32))
+
+    def test_skill_bias_blends_continuous_prefix_only_for_mixed_actions(self):
+        cfg = Config()
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 4
+        cfg.model.discrete_dim = 3
+        cfg.model.goal_dim = 2
+        cfg.train.batch_size = 2
+        cfg.train.seq_len = 2
+        soul = Soul(cfg)
+
+        action = np.array([0.2, 0.0, 1.0, 0.0], np.float32)
+        skill = np.array([0.8, 1.0, 0.0, 0.0], np.float32)
+        blended = soul._blend_skill_action(action, skill)
+
+        np.testing.assert_allclose(
+            blended, np.array([0.38, 0.0, 1.0, 0.0], np.float32),
+            rtol=1e-6, atol=1e-6,
+        )
