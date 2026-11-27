@@ -1112,3 +1112,33 @@ class DiscreteSkillBlendTests(unittest.TestCase):
             blended, np.array([0.38, 0.0, 1.0, 0.0], np.float32),
             rtol=1e-6, atol=1e-6,
         )
+class RewardStatsWarmupTests(unittest.TestCase):
+    def test_reward_scale_is_frozen_after_warmup(self):
+        from soul.memory import Episode
+
+        cfg = Config()
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 1
+        cfg.model.discrete_dim = 0
+        cfg.model.goal_dim = 2
+        cfg.train.batch_size = 2
+        cfg.train.seq_len = 4
+        cfg.train.imagine_horizon = 2
+        soul = Soul(cfg)
+
+        ep = Episode()
+        enc = soul.enc.encode({'x': 0.0})
+        for _ in range(6):
+            ep.append(enc, np.zeros(1, np.float32), 1.0, 1.0,
+                      np.zeros(cfg.model.goal_dim, np.float32))
+        soul.replay.add_episode(ep)
+        batch = soul.replay.sample(1, np.random.default_rng(0))
+
+        soul.trainer._reward_stats.update({'mean': 0.0, 'std': 1.0})
+        soul.trainer.updates = 200
+
+        soul.trainer.update(batch)
+
+        self.assertEqual(soul.trainer._reward_stats['mean'], 0.0)
+        self.assertEqual(soul.trainer._reward_stats['std'], 1.0)

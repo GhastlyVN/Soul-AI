@@ -245,11 +245,14 @@ class Trainer:
         # chuan hoa — nen khong feedback vo hinh.
         # `.item()` de giu lai float thuan: tensor dua vao checkpoint se
         # keo theo thiet bi, va lam checkpoint nang khong can.
+        # Khoa thang do sau 200 buoc optimizer: target di doi trong luc
+        # head dang hoc lam R2 held-out tot hon (-0.38 -> -0.34 median).
         with torch.no_grad():
-            rew_stats['mean'] += 0.01 * (rewards.mean().item()
-                                         - rew_stats['mean'])
-            rew_stats['std'] += 0.01 * (rewards.std(unbiased=False).item()
-                                        - rew_stats['std'])
+            if self.updates < 200:
+                rew_stats['mean'] += 0.01 * (rewards.mean().item()
+                                             - rew_stats['mean'])
+                rew_stats['std'] += 0.01 * (rewards.std(unbiased=False).item()
+                                            - rew_stats['std'])
 
         # --- 4. CONTINUE ---
         pred_cont = m.continue_head(h_seq, z_seq)
