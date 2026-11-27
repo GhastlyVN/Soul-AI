@@ -217,6 +217,41 @@ class Soul:
             arr = arr[:self.cfg.model.action_dim]
         return arr.astype(np.float32)
 
+    def _blend_skill_action(self, action: np.ndarray,
+                            skill_action: np.ndarray) -> np.ndarray:
+        """Blend skills into continuous controls without inventing a categorical prior.
+
+        Archived skill summaries currently store scalar action means, not calibrated
+        discrete distributions. Keep the policy-selected discrete category unchanged
+        until memory records an explicit categorical prior and confidence.
+        """
+        action_dim = int(self.cfg.model.action_dim)
+        discrete_dim = int(self.cfg.model.discrete_dim)
+        if not 0 <= discrete_dim <= action_dim:
+            raise ValueError("discrete_dim must be between zero and action_dim")
+
+        blended = np.asarray(action, dtype=np.float32).reshape(-1).copy()
+        if blended.size != action_dim:
+            raise ValueError(
+                f"policy action has {blended.size} values; expected {action_dim}"
+            )
+        recalled = np.asarray(skill_action, dtype=np.float32).reshape(-1)
+        if recalled.size < action_dim:
+            recalled = np.pad(recalled, (0, action_dim - recalled.size))
+        elif recalled.size > action_dim:
+            recalled = recalled[:action_dim]
+
+        continuous_dim = action_dim - discrete_dim
+        blended[:continuous_dim] = (
+            0.7 * blended[:continuous_dim] + 0.3 * recalled[:continuous_dim]
+        )
+        if discrete_dim:
+            discrete = blended[continuous_dim:]
+            selected = int(np.argmax(discrete))
+            discrete.fill(0.0)
+            discrete[selected] = 1.0
+        return blended.astype(np.float32)
+
     def plan_action(self, observation: Any, n_samples: Optional[int] = None,
                    deterministic: bool = False) -> np.ndarray:
         """Lập kế hoạch với một vài hành động giả định, rồi chọn cái có
@@ -293,7 +328,7 @@ class Soul:
             # recalled skill only ever biases the rarely used direct path.
             skill_action = self.recall_skill_action(observation)
             if skill_action is not None:
-                best_action = (0.7 * best_action + 0.3 * skill_action).astype(np.float32)
+                best_action = self._blend_skill_action(best_action, skill_action)
             self._prev_action = best_action
             return best_action
 
@@ -359,7 +394,7 @@ class Soul:
 
         skill_action = self.recall_skill_action(observation)
         if skill_action is not None:
-            action = 0.7 * np.asarray(action, dtype=np.float32) + 0.3 * skill_action
+            action = self._blend_skill_action(action, skill_action)
 
         self._h = h
         self._z = z
