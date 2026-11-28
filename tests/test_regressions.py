@@ -604,6 +604,39 @@ class PlanningRewardAlignmentTests(unittest.TestCase):
 
         self.assertEqual(len(calls), 1)
 
+    def test_discrete_planner_scores_every_action_once(self):
+        import torch
+
+        cfg = Config()
+        cfg.model.hidden_dim = 8
+        cfg.model.latent_dim = 4
+        cfg.model.action_dim = 3
+        cfg.model.discrete_dim = 3
+        cfg.model.plan_samples = 6
+        cfg.train.batch_size = 2
+        cfg.train.seq_len = 4
+        soul = Soul(cfg)
+
+        seen = []
+        original_effect = soul.model.action_effect_head.forward
+
+        def effect_spy(hidden, latent, action):
+            seen.append(action.detach().cpu().clone())
+            return original_effect(hidden, latent, action)
+
+        soul.model.action_effect_head.forward = effect_spy
+        action = soul.plan_action(
+            {'time': 0.0, 'x': 0.0, 'y': 0.0}, n_samples=6)
+
+        self.assertEqual(len(seen), 1)
+        candidates = seen[0]
+        self.assertEqual(tuple(candidates.shape), (3, 3))
+        expected = torch.eye(3)
+        actual = torch.stack(sorted(candidates.unbind(0), key=lambda row: int(row.argmax())))
+        torch.testing.assert_close(actual, expected)
+        self.assertEqual(action.shape, (3,))
+        self.assertTrue(bool(np.isclose(action.sum(), 1.0)))
+
 
 class TrainingScheduleTests(unittest.TestCase):
     def test_each_batch_runs_two_updates(self):
