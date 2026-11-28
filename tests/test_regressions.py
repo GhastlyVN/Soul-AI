@@ -598,6 +598,61 @@ class SoulRegressionTests(unittest.TestCase):
             if os.path.exists(path):
                 os.remove(path)
 
+    def test_read_npz_bounds_row_field_materialization_before_numpy_load(self):
+        import soul.dataset as dataset
+
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            row_count = 4
+            action_dim = 3
+            observation_fields = ('position', 'velocity')
+            np.savez(
+                path,
+                action=np.zeros((row_count, action_dim), dtype=np.float32),
+                reward=np.zeros(row_count, dtype=np.float32),
+                done=np.zeros(row_count, dtype=np.int64),
+                ep=np.zeros(row_count, dtype=np.int64),
+                obs__position=np.zeros(row_count, dtype=np.float32),
+                obs__velocity=np.zeros(row_count, dtype=np.float32),
+            )
+            estimated = row_count * (
+                dataset.NPZ_ROW_OVERHEAD_BYTES
+                + dataset.NPZ_FIELD_OVERHEAD_BYTES * (action_dim + len(observation_fields) + 3)
+            )
+            with patch.object(dataset, 'MAX_IMPORT_NPZ_MATERIALIZED_BYTES', estimated - 1), patch.object(
+                dataset.np, 'load', side_effect=AssertionError('np.load called')
+            ):
+                with self.assertRaisesRegex(ValueError, 'materialization exceeds the memory budget'):
+                    dataset.read_npz(path, action_dim=action_dim, goal_dim=0)
+
+            with patch.object(dataset, 'MAX_IMPORT_NPZ_MATERIALIZED_BYTES', estimated):
+                episodes = dataset.read_npz(path, action_dim=action_dim, goal_dim=0)
+            self.assertEqual(len(episodes), 1)
+            self.assertEqual(len(episodes[0]['obs']), row_count)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_read_npz_rejects_deep_observation_paths_before_numpy_load(self):
+        import soul.dataset as dataset
+
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            deep_field = '.'.join(['segment'] * (dataset.MAX_IMPORT_NPZ_OBS_FIELD_COMPONENTS + 1))
+            np.savez(
+                path,
+                action=np.zeros((1, 1), dtype=np.float32),
+                **{f'obs__{deep_field}': np.zeros(1, dtype=np.float32)},
+            )
+            with patch.object(dataset.np, 'load', side_effect=AssertionError('np.load called')):
+                with self.assertRaisesRegex(ValueError, 'observation field exceeds'):
+                    dataset.read_npz(path, action_dim=1, goal_dim=0)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
     def test_read_npz_rejects_entry_count_before_zipfile_construction(self):
         import soul.dataset as dataset
         fd, path = tempfile.mkstemp(suffix='.npz')

@@ -79,6 +79,13 @@ MAX_IMPORT_BYTES = 256 * 1024 * 1024
 MAX_IMPORT_ROWS = 1_000_000
 MAX_IMPORT_NPZ_ENTRIES = 4096
 MAX_IMPORT_NPZ_CENTRAL_DIRECTORY_BYTES = 4 * 1024 * 1024
+# Conservative admission estimate for the row dictionaries, nested observations and
+# episode copies built after NumPy arrays are materialized. This is not allocator accounting.
+MAX_IMPORT_NPZ_MATERIALIZED_BYTES = 256 * 1024 * 1024
+MAX_IMPORT_NPZ_OBS_FIELD_BYTES = 256
+MAX_IMPORT_NPZ_OBS_FIELD_COMPONENTS = 16
+NPZ_ROW_OVERHEAD_BYTES = 512
+NPZ_FIELD_OVERHEAD_BYTES = 256
 MAX_NPY_HEADER_BYTES = 64 * 1024
 
 
@@ -260,7 +267,7 @@ def _npz_snapshot(path: str):
             yield snapshot
 
 
-def _check_npz_limits(stream) -> None:
+def _check_npz_limits(stream, action_dim: int) -> None:
     """Preflight one immutable NPZ snapshot before NumPy can allocate its arrays."""
     position = stream.tell()
     try:
@@ -314,6 +321,7 @@ def _check_npz_limits(stream) -> None:
 
             total_uncompressed = 0
             seen = set()
+            array_shapes = {}
             for info in entries:
                 name = info.filename
                 if (
@@ -363,11 +371,78 @@ def _check_npz_limits(stream) -> None:
                         or payload_bytes != info.file_size - header_bytes
                     ):
                         raise ValueError(f'NPZ array payload size does not match its header: {name}')
-                    if key in ('action', 'act', 'reward'):
-                        if not shape or shape[0] > MAX_IMPORT_ROWS:
-                            raise ValueError(
-                                f'import file exceeds {MAX_IMPORT_ROWS} row limit'
-                            )
+                    array_shapes[key] = shape
+
+            action_keys = [name for name in ('action', 'act') if name in array_shapes]
+            if len(action_keys) > 1:
+                raise ValueError('NPZ archive contains both action and act arrays')
+            if action_keys:
+                action_shape = array_shapes[action_keys[0]]
+                if len(action_shape) != 2 or action_shape[1] != action_dim:
+                    raise ValueError(
+                        f'NPZ action table must have shape (n, {action_dim}), got {action_shape}'
+                    )
+                row_count = action_shape[0]
+                action_columns = action_shape[1]
+            else:
+                if 'reward' not in array_shapes:
+                    raise ValueError('NPZ archive must contain action, act, or reward')
+                reward_shape = array_shapes['reward']
+                if len(reward_shape) != 1:
+                    raise ValueError('NPZ field reward must be one-dimensional')
+                row_count = reward_shape[0]
+                action_columns = action_dim
+                synthesized_bytes = row_count * action_dim * np.dtype(np.float32).itemsize
+                if synthesized_bytes > MAX_IMPORT_BYTES:
+                    raise ValueError('synthesized NPZ action table exceeds the import byte limit')
+
+            if row_count > MAX_IMPORT_ROWS:
+                raise ValueError(f'import file exceeds {MAX_IMPORT_ROWS} row limit')
+
+            obs_names = [name for name in array_shapes if name.startswith('obs__')]
+            obs_nodes = 0
+            for name in obs_names:
+                field = name[len('obs__'):]
+                try:
+                    field_bytes = len(field.encode('utf-8'))
+                except UnicodeEncodeError as error:
+                    raise ValueError(f'NPZ observation field name is not valid UTF-8: {name}') from error
+                parts = field.split('.')
+                if (
+                    not field
+                    or field_bytes > MAX_IMPORT_NPZ_OBS_FIELD_BYTES
+                    or len(parts) > MAX_IMPORT_NPZ_OBS_FIELD_COMPONENTS
+                    or any(not part for part in parts)
+                ):
+                    raise ValueError(
+                        f'NPZ observation field exceeds the portable name limits: {name}'
+                    )
+                obs_nodes += len(parts)
+
+            for name in ('ep', 'done', 'reward') + tuple(obs_names):
+                if name not in array_shapes:
+                    continue
+                shape = array_shapes[name]
+                if len(shape) != 1:
+                    raise ValueError(f'NPZ field {name} must be one-dimensional')
+                if shape[0] != row_count:
+                    raise ValueError(
+                        f'NPZ field {name} has {shape[0]} rows, expected {row_count}'
+                    )
+
+            # read_npz creates per-row strings/dicts, _group creates nested episode
+            # containers, and ingest later builds vectorized Episode objects. Bound that
+            # expansion before np.load can materialize any member.
+            estimated_columns = action_columns + obs_nodes + 3
+            estimated_bytes = row_count * (
+                NPZ_ROW_OVERHEAD_BYTES + NPZ_FIELD_OVERHEAD_BYTES * estimated_columns
+            )
+            if estimated_bytes > MAX_IMPORT_NPZ_MATERIALIZED_BYTES:
+                raise ValueError(
+                    'NPZ row materialization exceeds the memory budget: '
+                    f'estimated {estimated_bytes} bytes '
+                    f'(limit {MAX_IMPORT_NPZ_MATERIALIZED_BYTES})'
+                )
     except ValueError:
         raise
     except (OSError, zipfile.BadZipFile, IndexError, TypeError) as error:
@@ -393,7 +468,7 @@ def read_npz(path: str, action_dim: int, goal_dim: int) -> List[Dict[str, Any]]:
     if isinstance(action_dim, bool) or not isinstance(action_dim, int) or action_dim < 1:
         raise ValueError('action_dim must be a positive integer')
     with _npz_snapshot(path) as snapshot:
-        _check_npz_limits(snapshot)
+        _check_npz_limits(snapshot, action_dim)
         snapshot.seek(0)
         with np.load(
             snapshot,
