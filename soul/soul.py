@@ -619,6 +619,8 @@ class Soul:
         self._z = None
         self._prev_action = None
         self._cur_ep = Episode()
+        self.ep_reward = 0.0
+        self.ep_len = 0
 
     def save(self, path: str, extra: dict | None = None):
         """Lưu checkpoint: trọng số, schema encoder, replay, stats."""

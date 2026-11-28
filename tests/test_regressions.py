@@ -711,6 +711,19 @@ class PlanningRuntimeStateTests(unittest.TestCase):
                          'planning did not advance the hidden state on the next step')
 
 
+class ResetStateTests(unittest.TestCase):
+    def test_reset_clears_episode_metrics(self):
+        soul = Soul(Config())
+
+        soul.ep_reward = 12.5
+        soul.ep_len = 7
+        soul.reset_state()
+
+        self.assertEqual(soul.ep_reward, 0.0)
+        self.assertEqual(soul.ep_len, 0)
+        self.assertEqual(soul._cur_ep.length, 0)
+
+
 class PlanningSkillTests(unittest.TestCase):
     def test_planner_biases_the_chosen_action_with_a_recalled_skill(self):
         import torch
