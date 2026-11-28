@@ -530,6 +530,37 @@ class SoulRegressionTests(unittest.TestCase):
             if os.path.exists(path):
                 os.remove(path)
 
+    def test_read_npz_rejects_non_finite_numeric_arrays(self):
+        import numpy as np
+        from soul.dataset import read_npz
+
+        invalid_values = {
+            'action': np.array([[np.nan]], dtype=np.float32),
+            'reward': np.array([np.inf], dtype=np.float32),
+            'done': np.array([np.inf], dtype=np.float32),
+            'ep': np.array([np.nan], dtype=np.float32),
+            'obs__position': np.array([-np.inf], dtype=np.float32),
+        }
+        for field, invalid in invalid_values.items():
+            with self.subTest(field=field):
+                fd, path = tempfile.mkstemp(suffix='.npz')
+                os.close(fd)
+                try:
+                    arrays = {
+                        'action': np.array([[0.25]], dtype=np.float32),
+                        'reward': np.array([1.0], dtype=np.float32),
+                        'done': np.array([0], dtype=np.int64),
+                        'ep': np.array([0], dtype=np.int64),
+                        'obs__position': np.array([10.0], dtype=np.float32),
+                    }
+                    arrays[field] = invalid
+                    np.savez(path, **arrays)
+                    with self.assertRaisesRegex(ValueError, 'contains non-finite values'):
+                        read_npz(path, action_dim=1, goal_dim=0)
+                finally:
+                    if os.path.exists(path):
+                        os.remove(path)
+
     def test_read_npz_rejects_shape_bomb_before_numpy_load(self):
         import soul.dataset as dataset
         fd, path = tempfile.mkstemp(suffix='.npz')

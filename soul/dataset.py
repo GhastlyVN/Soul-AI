@@ -376,6 +376,19 @@ def _check_npz_limits(stream) -> None:
         stream.seek(position)
 
 
+def _validate_finite_array(name: str, array: np.ndarray) -> None:
+    """Reject NaN/Inf with a bounded temporary buffer, not a full-size mask."""
+    iterator = np.nditer(
+        array,
+        flags=['external_loop', 'buffered'],
+        op_flags=['readonly'],
+        buffersize=65_536,
+    )
+    for values in iterator:
+        if not np.isfinite(values).all():
+            raise ValueError(f'NPZ field {name} contains non-finite values')
+
+
 def read_npz(path: str, action_dim: int, goal_dim: int) -> List[Dict[str, Any]]:
     if isinstance(action_dim, bool) or not isinstance(action_dim, int) or action_dim < 1:
         raise ValueError('action_dim must be a positive integer')
@@ -393,7 +406,9 @@ def read_npz(path: str, action_dim: int, goal_dim: int) -> List[Dict[str, Any]]:
             if not any(name in names for name in ('action', 'act', 'reward')):
                 raise ValueError('NPZ archive must contain action, act, or reward')
             if 'action' in names or 'act' in names:
-                act = z['action'] if 'action' in names else z['act']
+                act_name = 'action' if 'action' in names else 'act'
+                act = z[act_name]
+                _validate_finite_array(act_name, act)
             else:
                 reward = z['reward']
                 if reward.ndim != 1:
@@ -421,6 +436,7 @@ def read_npz(path: str, action_dim: int, goal_dim: int) -> List[Dict[str, Any]]:
                         raise ValueError(
                             f'NPZ field {k} has {size} rows, expected {n}'
                         )
+                    _validate_finite_array(k, array)
 
             if n == 0:
                 return []
