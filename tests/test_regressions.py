@@ -647,7 +647,7 @@ class SoulRegressionTests(unittest.TestCase):
                 **{f'obs__{deep_field}': np.zeros(1, dtype=np.float32)},
             )
             with patch.object(dataset.np, 'load', side_effect=AssertionError('np.load called')):
-                with self.assertRaisesRegex(ValueError, 'observation field exceeds'):
+                with self.assertRaisesRegex(ValueError, 'observation field name exceeds'):
                     dataset.read_npz(path, action_dim=1, goal_dim=0)
         finally:
             if os.path.exists(path):

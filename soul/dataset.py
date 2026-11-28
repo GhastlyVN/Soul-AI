@@ -415,7 +415,7 @@ def _check_npz_limits(stream, action_dim: int) -> None:
                     or any(not part for part in parts)
                 ):
                     raise ValueError(
-                        f'NPZ observation field exceeds the portable name limits: {name}'
+                        f'NPZ observation field name exceeds the portable limits: {name}'
                     )
                 obs_nodes += len(parts)
 
