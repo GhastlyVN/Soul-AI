@@ -182,11 +182,11 @@ class Soul:
             self.load(checkpoint)
 
     # -----------------------------------------------------------------
-    def _encode_observation(self, observation: Any):
+    def _encode_observation(self, observation: Any, **kwargs):
         """Ma hoa quan sat bang CUNG thang da dung luc nap du lieu."""
         if self.obs_norm:
             observation = apply_norm(observation, self.obs_norm)
-        return self.enc.encode(observation)
+        return self.enc.encode(observation, **kwargs)
 
     # -----------------------------------------------------------------
     def set_goal(self, goal: np.ndarray):
