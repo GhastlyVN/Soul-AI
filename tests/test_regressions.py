@@ -696,6 +696,41 @@ class SoulRegressionTests(unittest.TestCase):
             if os.path.exists(path):
                 os.remove(path)
 
+
+    def test_read_npz_rejects_unsupported_member_path_before_numpy_load(self):
+        import soul.dataset as dataset
+        array = io.BytesIO()
+        np.lib.format.write_array(array, np.array([[1.0]], dtype=np.float32))
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            with zipfile.ZipFile(path, 'w') as archive:
+                archive.writestr('../action.npy', array.getvalue())
+            with patch.object(dataset.np, 'load', side_effect=AssertionError('np.load called')):
+                with self.assertRaisesRegex(ValueError, 'unsupported NPZ member path'):
+                    dataset.read_npz(path, action_dim=1, goal_dim=0)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_read_npz_rejects_duplicate_member_names_before_numpy_load(self):
+        import soul.dataset as dataset
+        array = io.BytesIO()
+        np.lib.format.write_array(array, np.array([[1.0]], dtype=np.float32))
+        payload = array.getvalue()
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            with zipfile.ZipFile(path, 'w') as archive:
+                archive.writestr('action.npy', payload)
+                archive.writestr('action.npy', payload)
+            with patch.object(dataset.np, 'load', side_effect=AssertionError('np.load called')):
+                with self.assertRaisesRegex(ValueError, 'duplicate or empty'):
+                    dataset.read_npz(path, action_dim=1, goal_dim=0)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
 if __name__ == '__main__':
     unittest.main()
 
