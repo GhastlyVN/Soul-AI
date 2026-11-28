@@ -296,7 +296,15 @@ class Soul:
             self._z = z
             mean, logstd, logits = self.model.policy_head(h, z, g)
             candidates = []
-            if deterministic:
+            exhaustive = (not deterministic
+                          and self.cfg.model.discrete_dim == self.cfg.model.action_dim
+                          and 0 < self.cfg.model.action_dim <= n_samples)
+            if exhaustive:
+                # The whole discrete set fits in the sample budget: score every
+                # action instead of hoping random policy samples cover it.
+                candidates = list(torch.eye(
+                    self.cfg.model.action_dim, device=self.device).unbind(0))
+            elif deterministic:
                 candidates.append(self.model.policy_head.sample(
                     mean, logstd, logits, deterministic=True).squeeze(0))
             else:
