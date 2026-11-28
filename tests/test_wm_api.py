@@ -160,6 +160,17 @@ def test_nine_way_discrete_policy_has_no_synthetic_continuous_action():
     assert np.isfinite(losses["total"])
 
 
+def test_surprise_uses_same_normalization_as_observe():
+    soul, adapter = make_adapter()
+    soul.obs_norm = {'x': {'mean': 20.0, 'std': 0.5}}
+    obs = {'x': 21.0}
+
+    adapter.observe(obs, 0, 0.0, False)
+    score = adapter.surprise(obs)
+
+    assert np.isfinite(score)
+
+
 def test_minicraft_factory_configures_nine_discrete_actions():
     adapter = SoulAdapter.for_minicraft(hidden_dim=8, latent_dim=4, seed=7)
     assert adapter.soul.cfg.model.action_dim == 9
