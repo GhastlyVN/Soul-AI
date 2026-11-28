@@ -380,7 +380,7 @@ def _validate_finite_array(name: str, array: np.ndarray) -> None:
     """Reject NaN/Inf with a bounded temporary buffer, not a full-size mask."""
     iterator = np.nditer(
         array,
-        flags=['external_loop', 'buffered'],
+        flags=['external_loop', 'buffered', 'zerosize_ok'],
         op_flags=['readonly'],
         buffersize=65_536,
     )

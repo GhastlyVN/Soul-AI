@@ -530,6 +530,25 @@ class SoulRegressionTests(unittest.TestCase):
             if os.path.exists(path):
                 os.remove(path)
 
+    def test_read_npz_preserves_empty_dataset_behavior(self):
+        from soul.dataset import read_npz
+
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            np.savez(
+                path,
+                action=np.empty((0, 1), dtype=np.float32),
+                reward=np.empty((0,), dtype=np.float32),
+                done=np.empty((0,), dtype=np.int64),
+                ep=np.empty((0,), dtype=np.int64),
+                obs__position=np.empty((0,), dtype=np.float32),
+            )
+            self.assertEqual(read_npz(path, action_dim=1, goal_dim=0), [])
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
     def test_read_npz_rejects_non_finite_numeric_arrays(self):
         import numpy as np
         from soul.dataset import read_npz
