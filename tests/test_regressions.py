@@ -1,5 +1,7 @@
 import csv
+import io
 import os
+import zipfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -510,6 +512,190 @@ class SoulRegressionTests(unittest.TestCase):
                 self.skipTest(f'symlink creation is unavailable: {error}')
             with self.assertRaisesRegex(ValueError, 'regular|opened safely'):
                 ArchiveMemory().load(alias)
+
+    def test_read_npz_valid_multi_array_preserves_alignment(self):
+        from soul.dataset import read_npz
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            np.savez(path, action=np.array([[0.25, -0.5], [0.75, 0.125]], dtype=np.float32),
+                     reward=np.array([1.0, 2.0], dtype=np.float32),
+                     done=np.array([0, 1], dtype=np.int64), ep=np.array([0, 0], dtype=np.int64),
+                     obs__position=np.array([10.0, 11.0], dtype=np.float32))
+            episodes = read_npz(path, action_dim=2, goal_dim=0)
+            self.assertEqual(len(episodes), 1)
+            np.testing.assert_allclose(episodes[0]['act'], [[0.25, -0.5], [0.75, 0.125]])
+            self.assertEqual([row['position'] for row in episodes[0]['obs']], [10.0, 11.0])
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_read_npz_rejects_shape_bomb_before_numpy_load(self):
+        import soul.dataset as dataset
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            header = io.BytesIO()
+            np.lib.format.write_array_header_1_0(
+                header, {'descr': np.dtype(np.float32).str, 'fortran_order': False, 'shape': (10 ** 12,)}
+            )
+            with zipfile.ZipFile(path, 'w') as archive:
+                archive.writestr('action.npy', header.getvalue())
+            with patch.object(dataset.np, 'load', side_effect=AssertionError('np.load called')):
+                with self.assertRaisesRegex(ValueError, 'array exceeds'):
+                    dataset.read_npz(path, action_dim=1, goal_dim=0)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_read_npz_rejects_entry_count_before_zipfile_construction(self):
+        import soul.dataset as dataset
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            with zipfile.ZipFile(path, 'w') as archive:
+                archive.writestr('action.npy', b'')
+                archive.writestr('reward.npy', b'')
+            with patch.object(dataset, 'MAX_IMPORT_NPZ_ENTRIES', 1), patch.object(
+                dataset.zipfile, 'ZipFile', side_effect=AssertionError('ZipFile constructed')
+            ):
+                with self.assertRaisesRegex(ValueError, 'too many entries'):
+                    dataset.read_npz(path, action_dim=1, goal_dim=0)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_read_npz_rejects_central_directory_before_zipfile_construction(self):
+        import soul.dataset as dataset
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            np.savez(path, action=np.array([[1.0]], dtype=np.float32))
+            original = dataset.zipfile._EndRecData
+            def oversized(stream):
+                record = list(original(stream))
+                record[5] = 2
+                return record
+            with patch.object(dataset, 'MAX_IMPORT_NPZ_CENTRAL_DIRECTORY_BYTES', 1), patch.object(
+                dataset.zipfile, '_EndRecData', side_effect=oversized
+            ), patch.object(dataset.zipfile, 'ZipFile', side_effect=AssertionError('ZipFile constructed')):
+                with self.assertRaisesRegex(ValueError, 'central directory'):
+                    dataset.read_npz(path, action_dim=1, goal_dim=0)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_read_npz_rejects_compressed_size_before_zipfile(self):
+        import soul.dataset as dataset
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            np.savez(path, action=np.array([[1.0]], dtype=np.float32))
+            with patch.object(dataset, 'MAX_IMPORT_BYTES', 8), patch.object(
+                dataset.zipfile, 'ZipFile', side_effect=AssertionError('ZipFile constructed')
+            ), patch.object(dataset.np, 'load', side_effect=AssertionError('np.load called')):
+                with self.assertRaisesRegex(ValueError, 'byte limit'):
+                    dataset.read_npz(path, action_dim=1, goal_dim=0)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_read_npz_rejects_expansion_before_numpy_load(self):
+        import soul.dataset as dataset
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            np.savez_compressed(path, action=np.zeros((1024, 1), dtype=np.float32))
+            self.assertLess(os.path.getsize(path), 512)
+            with patch.object(dataset, 'MAX_IMPORT_BYTES', 512), patch.object(
+                dataset.np, 'load', side_effect=AssertionError('np.load called')
+            ):
+                with self.assertRaisesRegex(ValueError, 'byte limit'):
+                    dataset.read_npz(path, action_dim=1, goal_dim=0)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_read_npz_rejects_object_dtype_before_numpy_load(self):
+        import soul.dataset as dataset
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            np.savez(path, action=np.array([{'x': 1}], dtype=object))
+            with patch.object(dataset.np, 'load', side_effect=AssertionError('np.load called')):
+                with self.assertRaisesRegex(ValueError, 'non-object numeric dtype'):
+                    dataset.read_npz(path, action_dim=1, goal_dim=0)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_read_npz_uses_verified_snapshot_after_path_replacement(self):
+        import soul.dataset as dataset
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        replacement = path + '.replacement.npz'
+        try:
+            np.savez(path, action=np.array([[0.25]], dtype=np.float32))
+            np.savez(replacement, action=np.array([[0.75]], dtype=np.float32))
+            original_load = dataset.np.load
+            def replace_then_load(snapshot, *args, **kwargs):
+                self.assertFalse(isinstance(snapshot, (str, bytes, os.PathLike)))
+                os.replace(replacement, path)
+                return original_load(snapshot, *args, **kwargs)
+            with patch.object(dataset.np, 'load', side_effect=replace_then_load):
+                episodes = dataset.read_npz(path, action_dim=1, goal_dim=0)
+            self.assertAlmostEqual(float(episodes[0]['act'][0][0]), 0.25)
+            replacement_episodes = dataset.read_npz(path, action_dim=1, goal_dim=0)
+            self.assertAlmostEqual(float(replacement_episodes[0]['act'][0][0]), 0.75)
+        finally:
+            for candidate in (path, replacement):
+                if os.path.exists(candidate):
+                    os.remove(candidate)
+
+    def test_read_npz_bounds_reward_only_synthesized_action_allocation(self):
+        import soul.dataset as dataset
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            np.savez(path, reward=np.array([1.0], dtype=np.float32))
+            with patch.object(dataset.np, 'zeros', side_effect=AssertionError('allocation attempted')):
+                with self.assertRaisesRegex(ValueError, 'synthesized NPZ action table'):
+                    dataset.read_npz(path, action_dim=dataset.MAX_IMPORT_BYTES // 4 + 1, goal_dim=0)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_read_npz_validates_reward_rank_before_synthesized_action_allocation(self):
+        import soul.dataset as dataset
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            np.savez(path, reward=np.array([[1.0]], dtype=np.float32))
+            with patch.object(dataset.np, 'zeros', side_effect=AssertionError('allocation attempted')):
+                with self.assertRaisesRegex(ValueError, 'reward must be one-dimensional'):
+                    dataset.read_npz(path, action_dim=1, goal_dim=0)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_read_npz_rejects_empty_observation_field_name(self):
+        import soul.dataset as dataset
+        action = io.BytesIO()
+        observation = io.BytesIO()
+        np.lib.format.write_array(action, np.array([[1.0]], dtype=np.float32))
+        np.lib.format.write_array(observation, np.array([1.0], dtype=np.float32))
+        fd, path = tempfile.mkstemp(suffix='.npz')
+        os.close(fd)
+        try:
+            with zipfile.ZipFile(path, 'w') as archive:
+                archive.writestr('action.npy', action.getvalue())
+                archive.writestr('obs__.npy', observation.getvalue())
+            with self.assertRaisesRegex(ValueError, 'observation field name'):
+                dataset.read_npz(path, action_dim=1, goal_dim=0)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
 if __name__ == '__main__':
     unittest.main()
 

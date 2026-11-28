@@ -49,9 +49,14 @@ Moi phan giong `obs__` bien se ghep vao mot dict quan sat chung.
 import argparse
 import csv
 import io
+import math
 import os
+import stat
 import sys
+import tempfile
 import zipfile
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Dict, List, Sequence
 
 import numpy as np
@@ -72,6 +77,9 @@ _ACTION_PREFIX = 'a'
 # Untrusted import files must not be materialized before their limits are checked.
 MAX_IMPORT_BYTES = 256 * 1024 * 1024
 MAX_IMPORT_ROWS = 1_000_000
+MAX_IMPORT_NPZ_ENTRIES = 4096
+MAX_IMPORT_NPZ_CENTRAL_DIRECTORY_BYTES = 4 * 1024 * 1024
+MAX_NPY_HEADER_BYTES = 64 * 1024
 
 
 def _to_action(row: Dict[str, str], action_dim: int) -> np.ndarray:
@@ -155,73 +163,295 @@ def read_csv(path: str, action_dim: int, goal_dim: int) -> List[Dict[str, Any]]:
     return _group(rows, action_dim, goal_dim, list(header))
 
 
-def _check_npz_limits(path: str) -> None:
-    """Reject a compressed archive whose declared members exceed the import cap."""
-    total = 0
-    with zipfile.ZipFile(path) as archive:
-        for info in archive.infolist():
-            total += info.file_size
-            if total > MAX_IMPORT_BYTES:
-                raise ValueError(f'import file exceeds {MAX_IMPORT_BYTES} byte limit: {total} bytes')
+def _file_identity(metadata):
+    identity = (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+    )
+    if os.name != 'nt':
+        return (*identity, metadata.st_ctime_ns)
+    # On Windows st_ctime is creation time, not a change timestamp.
+    return identity
+
+
+def _is_link_or_reparse_point(metadata) -> bool:
+    return stat.S_ISLNK(metadata.st_mode) or bool(
+        getattr(metadata, 'st_file_attributes', 0) & 0x400
+    )
+
+
+@contextmanager
+def _npz_snapshot(path: str):
+    """Copy one bounded regular-file handle to a private disk-backed snapshot."""
+    source = Path(path)
+    try:
+        path_before = source.lstat()
+    except OSError as error:
+        raise ValueError(f'could not inspect NPZ input: {source}') from error
+    if _is_link_or_reparse_point(path_before) or not stat.S_ISREG(path_before.st_mode):
+        raise ValueError('NPZ input must be a regular non-symlink file')
+
+    flags = os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NONBLOCK', 0)
+    if hasattr(os, 'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(source, flags)
+    except OSError as error:
+        raise ValueError(f'could not open NPZ input safely: {source}: {error}') from error
+
+    with os.fdopen(descriptor, 'rb') as raw:
+        with tempfile.TemporaryFile(mode='w+b') as snapshot:
+            before = os.fstat(raw.fileno())
+            if (
+                _is_link_or_reparse_point(before)
+                or not stat.S_ISREG(before.st_mode)
+                or _file_identity(before) != _file_identity(path_before)
+            ):
+                raise ValueError('NPZ input changed while it was being opened')
+            try:
+                path_after_open = source.lstat()
+            except OSError as error:
+                raise ValueError('NPZ input path changed while it was being opened') from error
+            if (
+                _is_link_or_reparse_point(path_after_open)
+                or not stat.S_ISREG(path_after_open.st_mode)
+                or _file_identity(path_after_open) != _file_identity(before)
+            ):
+                raise ValueError('NPZ input changed while it was being opened')
+            if before.st_size > MAX_IMPORT_BYTES:
+                raise ValueError(
+                    f'import file exceeds {MAX_IMPORT_BYTES} byte limit: {before.st_size} bytes'
+                )
+
+            total = 0
+            while True:
+                remaining = MAX_IMPORT_BYTES - total
+                chunk = raw.read(min(1024 * 1024, remaining + 1))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_IMPORT_BYTES:
+                    raise ValueError(
+                        f'import file exceeds {MAX_IMPORT_BYTES} byte limit: {total} bytes'
+                    )
+                snapshot.write(chunk)
+
+            after = os.fstat(raw.fileno())
+            try:
+                path_after = source.lstat()
+            except OSError as error:
+                raise ValueError('NPZ input path changed while it was being snapshotted') from error
+            if (
+                total != before.st_size
+                or _file_identity(before) != _file_identity(after)
+                or _file_identity(after) != _file_identity(path_after)
+                or _is_link_or_reparse_point(path_after)
+                or not stat.S_ISREG(path_after.st_mode)
+            ):
+                raise ValueError('NPZ input changed while it was being snapshotted')
+
+            # Close the source before yielding so a caller can safely replace its path
+            # (including on Windows); all later validation/loading uses only snapshot.
+            raw.close()
+            snapshot.flush()
+            snapshot.seek(0)
+            yield snapshot
+
+
+def _check_npz_limits(stream) -> None:
+    """Preflight one immutable NPZ snapshot before NumPy can allocate its arrays."""
+    position = stream.tell()
+    try:
+        stream.seek(0, os.SEEK_END)
+        file_size = stream.tell()
+        stream.seek(0)
+        endrec = zipfile._EndRecData(stream)
+        if endrec is None or len(endrec) < 10:
+            raise ValueError('NPZ input has no valid ZIP end record')
+        (
+            disk_number,
+            central_disk,
+            entries_on_disk,
+            entries_total,
+            central_size,
+            central_offset,
+        ) = endrec[1:7]
+        end_record_offset = endrec[9]
+        if disk_number != 0 or central_disk != 0 or entries_on_disk != entries_total:
+            raise ValueError('multi-disk NPZ archives are not supported')
+        if central_size == 0xFFFFFFFF or central_offset == 0xFFFFFFFF:
+            raise ValueError('NPZ ZIP64 end record is incomplete')
+        if entries_total > MAX_IMPORT_NPZ_ENTRIES:
+            raise ValueError(
+                f'NPZ archive has too many entries: {entries_total} '
+                f'(limit {MAX_IMPORT_NPZ_ENTRIES})'
+            )
+        if central_size > MAX_IMPORT_NPZ_CENTRAL_DIRECTORY_BYTES:
+            raise ValueError(
+                'NPZ central directory exceeds the metadata limit '
+                f'({MAX_IMPORT_NPZ_CENTRAL_DIRECTORY_BYTES} bytes)'
+            )
+        if (
+            central_size < 0
+            or central_offset < 0
+            or central_offset + central_size > file_size
+            or central_offset + central_size > end_record_offset
+        ):
+            raise ValueError('NPZ central-directory bounds are invalid')
+
+        stream.seek(0)
+        with zipfile.ZipFile(stream) as archive:
+            entries = archive.infolist()
+            if not entries:
+                raise ValueError('NPZ archive is empty')
+            if len(entries) > MAX_IMPORT_NPZ_ENTRIES:
+                raise ValueError(
+                    f'NPZ archive has too many entries: {len(entries)} '
+                    f'(limit {MAX_IMPORT_NPZ_ENTRIES})'
+                )
+
+            total_uncompressed = 0
+            seen = set()
+            for info in entries:
+                name = info.filename
+                if (
+                    info.is_dir()
+                    or not name.endswith('.npy')
+                    or '/' in name
+                    or chr(92) in name
+                ):
+                    raise ValueError(f'unsupported NPZ member path: {name}')
+                key = name[:-4]
+                if not key or key in seen:
+                    raise ValueError(f'duplicate or empty NPZ array name: {name}')
+                seen.add(key)
+                if info.flag_bits & 0x1:
+                    raise ValueError(f'encrypted NPZ member refused: {name}')
+
+                total_uncompressed += info.file_size
+                if total_uncompressed > MAX_IMPORT_BYTES:
+                    raise ValueError(
+                        f'import file exceeds {MAX_IMPORT_BYTES} byte limit: '
+                        f'{total_uncompressed} bytes'
+                    )
+
+                with archive.open(info) as member:
+                    version = np.lib.format.read_magic(member)
+                    if version == (1, 0):
+                        shape, _, dtype = np.lib.format.read_array_header_1_0(
+                            member, max_header_size=MAX_NPY_HEADER_BYTES
+                        )
+                    elif version == (2, 0):
+                        shape, _, dtype = np.lib.format.read_array_header_2_0(
+                            member, max_header_size=MAX_NPY_HEADER_BYTES
+                        )
+                    else:
+                        raise ValueError(f'unsupported NPY header version {version}: {name}')
+                    if dtype.hasobject or dtype.kind not in 'biuf':
+                        raise ValueError(f'NPZ array must use a non-object numeric dtype: {name}')
+                    elements = math.prod(shape)
+                    if elements > MAX_IMPORT_BYTES // max(dtype.itemsize, 1):
+                        raise ValueError(
+                            f'NPZ array exceeds {MAX_IMPORT_BYTES} byte limit: {name}'
+                        )
+                    payload_bytes = elements * dtype.itemsize
+                    header_bytes = member.tell()
+                    if (
+                        header_bytes > info.file_size
+                        or payload_bytes != info.file_size - header_bytes
+                    ):
+                        raise ValueError(f'NPZ array payload size does not match its header: {name}')
+                    if key in ('action', 'act', 'reward'):
+                        if not shape or shape[0] > MAX_IMPORT_ROWS:
+                            raise ValueError(
+                                f'import file exceeds {MAX_IMPORT_ROWS} row limit'
+                            )
+    except ValueError:
+        raise
+    except (OSError, zipfile.BadZipFile, IndexError, TypeError) as error:
+        raise ValueError('invalid NPZ archive') from error
+    finally:
+        stream.seek(position)
 
 
 def read_npz(path: str, action_dim: int, goal_dim: int) -> List[Dict[str, Any]]:
-    _check_npz_limits(path)
-    z = np.load(path, allow_pickle=False)
-    names = list(z.keys())
-    if 'action' in names or 'act' in names:
-        act = z['action'] if 'action' in names else z['act']
-    else:
-        act = np.zeros((len(z['reward']), action_dim), np.float32)
-    n = len(act)
-    if n > MAX_IMPORT_ROWS:
-        raise ValueError(f'import file exceeds {MAX_IMPORT_ROWS} row limit')
-    if act.ndim != 2 or act.shape[1] != action_dim:
-        raise ValueError(
-            f'NPZ action table must have shape (n, {action_dim}), got {act.shape}')
-    for k in names:
-        if k in ('ep', 'done', 'reward') or k.startswith('obs__'):
-            array = z[k]
-            if array.ndim != 1:
-                raise ValueError(f'NPZ field {k} must be one-dimensional')
-            size = len(array)
-            if size != n:
+    if isinstance(action_dim, bool) or not isinstance(action_dim, int) or action_dim < 1:
+        raise ValueError('action_dim must be a positive integer')
+    with _npz_snapshot(path) as snapshot:
+        _check_npz_limits(snapshot)
+        snapshot.seek(0)
+        with np.load(
+            snapshot,
+            allow_pickle=False,
+            max_header_size=MAX_NPY_HEADER_BYTES,
+        ) as z:
+            names = list(z.keys())
+            if 'action' in names and 'act' in names:
+                raise ValueError('NPZ archive contains both action and act arrays')
+            if not any(name in names for name in ('action', 'act', 'reward')):
+                raise ValueError('NPZ archive must contain action, act, or reward')
+            if 'action' in names or 'act' in names:
+                act = z['action'] if 'action' in names else z['act']
+            else:
+                reward = z['reward']
+                if reward.ndim != 1:
+                    raise ValueError('NPZ field reward must be one-dimensional')
+                if len(reward) > MAX_IMPORT_ROWS:
+                    raise ValueError(f'import file exceeds {MAX_IMPORT_ROWS} row limit')
+                synthesized_bytes = len(reward) * action_dim * np.dtype(np.float32).itemsize
+                if synthesized_bytes > MAX_IMPORT_BYTES:
+                    raise ValueError('synthesized NPZ action table exceeds the import byte limit')
+                act = np.zeros((len(reward), action_dim), np.float32)
+            n = len(act)
+            if n > MAX_IMPORT_ROWS:
+                raise ValueError(f'import file exceeds {MAX_IMPORT_ROWS} row limit')
+            if act.ndim != 2 or act.shape[1] != action_dim:
                 raise ValueError(
-                    f'NPZ field {k} has {size} rows, expected {n}')
+                    f'NPZ action table must have shape (n, {action_dim}), got {act.shape}'
+                )
+            for k in names:
+                if k in ('ep', 'done', 'reward') or k.startswith('obs__'):
+                    array = z[k]
+                    if array.ndim != 1:
+                        raise ValueError(f'NPZ field {k} must be one-dimensional')
+                    size = len(array)
+                    if size != n:
+                        raise ValueError(
+                            f'NPZ field {k} has {size} rows, expected {n}'
+                        )
 
-    if n == 0:
-        return []
+            if n == 0:
+                return []
 
-    # Gom cac bien `obs__*` vao mot dict chung.
-    fields = {}
-    for k in names:
-        if k.startswith('obs__'):
-            field = k[len('obs__'):]
-            if field in fields:
-                raise ValueError(f'NPZ observation field is duplicated: {field}')
-            fields[field] = [z[k]]
+            fields = {}
+            for k in names:
+                if k.startswith('obs__'):
+                    field = k[len('obs__'):]
+                    if not field:
+                        raise ValueError('NPZ observation field name must not be empty')
+                    if field in fields:
+                        raise ValueError(f'NPZ observation field is duplicated: {field}')
+                    fields[field] = z[k]
 
-    ep_ids = z['ep'] if 'ep' in names else np.zeros(n, int)
-    dones = z['done'] if 'done' in names else np.zeros(n, int)
-    rews = z['reward'] if 'reward' in names else np.zeros(n, np.float32)
+            ep_ids = z['ep'] if 'ep' in names else np.zeros(n, int)
+            dones = z['done'] if 'done' in names else np.zeros(n, int)
+            rews = z['reward'] if 'reward' in names else np.zeros(n, np.float32)
 
-    rows = []
-    for i in range(n):
-        row: Dict[str, str] = {
-            'ep': str(int(ep_ids[i])),
-            'done': str(int(dones[i])),
-            'reward': str(float(rews[i])),
-        }
-        # GHI DAY DU tat ca chieu hanh dong. Ban v1 chi ghi `act[i][0]`
-        # nen moi truong da doc lai tep npz nhieu chieu deu mat cac chieu
-        # con lai.
-        for j in range(act.shape[1]):
-            row[f'{_ACTION_PREFIX}{j}'] = str(float(act[i][j]))
-        for fld, arrs in fields.items():
-            val = arrs[0][i]
-            row[fld] = str(float(val))
-        rows.append(row)
-    return _group(rows, action_dim, goal_dim, list(rows[0].keys()))
+            rows = []
+            for i in range(n):
+                row: Dict[str, str] = {
+                    'ep': str(int(ep_ids[i])),
+                    'done': str(int(dones[i])),
+                    'reward': str(float(rews[i])),
+                }
+                for j in range(act.shape[1]):
+                    row[f'{_ACTION_PREFIX}{j}'] = str(float(act[i][j]))
+                for fld, array in fields.items():
+                    row[fld] = str(float(array[i]))
+                rows.append(row)
+            return _group(rows, action_dim, goal_dim, list(rows[0].keys()) if rows else [])
 
 
 # ----------------------------------------------------------------------
